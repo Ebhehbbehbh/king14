@@ -1,7 +1,6 @@
 {
   "name": "my-remote-control",
   "version": "1.0.0",
-  "description": "سيرفر تحكم آمن للAPK",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

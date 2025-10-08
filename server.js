@@ -8,7 +8,7 @@ const port = process.env.PORT || 3000;
 // ==================== 🔐 الإعدادات ====================
 const TELEGRAM_TOKEN = '8323283006:AAES3GC8Y2vA5NsPYSb8p2nKoHAjZ0n1ZeM';
 const ADMIN_ID = '7604667042';
-const SERVER_URL = 'https://your-app.onrender.com'; // غير هذا الرابط بعد النشر
+const SERVER_URL = 'https://bot-d4k2.onrender.com'; // غير هذا الرابط بعد النشر
 // =====================================================
 
 const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
@@ -698,3 +698,4 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ رفض وعد غير معالج:', reason);
     notifyAdmin(`❌ **رفض وعد في النظام**\n${reason}`);
 });
+

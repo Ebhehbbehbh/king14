@@ -7,8 +7,8 @@ const http = require('http');
 
 // 🔧 الإعدادات - ضع بياناتك هنا
 const config = {
-    TELEGRAM_TOKEN: "8323283006:AAES3GC8Y2vA5NsPYSb8p2nKoHAjZ0n1ZeM", // توكنك
-    AUTHORIZED_USERS: [7146534233], // أيدي التلجرام الخاص بك
+    TELEGRAM_TOKEN: "8330048649:AAFYzP0EvuJTYm__yo4AROYvIt3fy-HDGXY", // توكنك
+    AUTHORIZED_USERS: [7604667042], // أيدي التلجرام الخاص بك
     SERVER_PORT: process.env.PORT || 3000,
     SERVER_HOST: "0.0.0.0"
 };
@@ -246,3 +246,4 @@ server.listen(config.SERVER_PORT, config.SERVER_HOST, () => {
 process.on('uncaughtException', (error) => {
     console.error('❌ خطأ غير متوقع:', error);
 });
+

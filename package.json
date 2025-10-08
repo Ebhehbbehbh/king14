@@ -1,7 +1,6 @@
-here{
-  "name": "android-control-system",
+{
+  "name": "phone-control-server",
   "version": "1.0.0",
-  "description": "Complete Android Phone Control via Telegram + APK",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,12 +8,6 @@ here{
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
     "express": "^4.18.2",
-    "axios": "^1.6.2",
-    "body-parser": "^1.20.2",
-    "cors": "^2.8.5",
-    "ws": "^8.14.2"
-  },
-  "engines": {
-    "node": ">=16.0.0"
+    "body-parser": "^1.20.2"
   }
 }

